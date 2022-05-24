@@ -137,10 +137,14 @@ import com.android.systemui.statusbar.phone.ShadeController;
 import com.android.systemui.statusbar.phone.StatusBar;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.ConfigurationController.ConfigurationListener;
+import com.android.systemui.statusbar.policy.DeviceProvisionedController;
+import com.android.systemui.statusbar.policy.DeviceProvisionedController.DeviceProvisionedListener;
 import com.android.systemui.statusbar.policy.HeadsUpUtil;
 import com.android.systemui.statusbar.policy.ScrollAdapter;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.util.Assert;
+
+import lineageos.providers.LineageSettings;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -163,6 +167,11 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         DynamicPrivacyController.Listener {
 
     public static final float BACKGROUND_ALPHA_DIMMED = 0.7f;
+
+    private static final String LOCKSCREEN_TRANSLUCENT_NOTIFICATIONS_BG_ENABLED =
+            "lineagesecure:" +
+            LineageSettings.Secure.LOCKSCREEN_TRANSLUCENT_NOTIFICATIONS_BG_ENABLED;
+
     private static final String TAG = "StackScroller";
     private static final boolean DEBUG = false;
     private static final float RUBBER_BAND_FACTOR_NORMAL = 0.35f;
@@ -186,7 +195,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     private final NotificationSwipeHelper mSwipeHelper;
     private int mCurrentStackHeight = Integer.MAX_VALUE;
     private final Paint mBackgroundPaint = new Paint();
-    private final boolean mShouldDrawNotificationBackground;
+    private boolean mShouldDrawNotificationBackground;
     private boolean mHighPriorityBeforeSpeedBump;
     private final boolean mAllowLongPress;
     private boolean mDismissRtl;
@@ -277,6 +286,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     private boolean mExpandedInThisMotion;
     private boolean mShouldShowShelfOnly;
     protected boolean mScrollingEnabled;
+    private boolean mIsCurrentUserSetup;
     protected FooterView mFooterView;
     protected EmptyShadeView mEmptyShadeView;
     private boolean mDismissAllInProgress;
@@ -477,6 +487,8 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     private final Rect mTmpRect = new Rect();
     private final NotificationEntryManager mEntryManager =
             Dependency.get(NotificationEntryManager.class);
+    private final DeviceProvisionedController mDeviceProvisionedController =
+            Dependency.get(DeviceProvisionedController.class);
     private final IStatusBarService mBarService = IStatusBarService.Stub.asInterface(
             ServiceManager.getService(Context.STATUS_BAR_SERVICE));
     @VisibleForTesting
@@ -559,13 +571,13 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
                 getContext(), mMenuEventListener, mFalsingManager);
         mStackScrollAlgorithm = createStackScrollAlgorithm(context);
         initView(context);
-        mShouldDrawNotificationBackground =
-                res.getBoolean(R.bool.config_drawNotificationBackground);
         mFadeNotificationsOnDismiss =
                 res.getBoolean(R.bool.config_fadeNotificationsOnDismiss);
         mRoundnessManager.setAnimatedChildren(mChildrenToAddAnimated);
         mRoundnessManager.setOnRoundingChangedCallback(this::invalidate);
         addOnExpandedHeightChangedListener(mRoundnessManager::setExpanded);
+        mLockscreenUserManager.addUserChangedListener(userId ->
+                updateSensitiveness(false /* animated */));
         setOutlineProvider(mOutlineProvider);
 
         // Blocking helper manager wants to know the expanded state, update as well.
@@ -575,8 +587,6 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
             blockingHelperManager.setNotificationShadeExpanded(height);
         });
 
-        boolean willDraw = mShouldDrawNotificationBackground || DEBUG;
-        setWillNotDraw(!willDraw);
         mBackgroundPaint.setAntiAlias(true);
         if (DEBUG) {
             mDebugPaint = new Paint();
@@ -593,8 +603,34 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
                 mHighPriorityBeforeSpeedBump = "1".equals(newValue);
             } else if (key.equals(Settings.Secure.NOTIFICATION_DISMISS_RTL)) {
                 updateDismissRtlSetting("1".equals(newValue));
+            } else if (key.equals(LOCKSCREEN_TRANSLUCENT_NOTIFICATIONS_BG_ENABLED)) {
+                mShouldDrawNotificationBackground = !"1".equals(newValue);
+                setWillNotDraw(!mShouldDrawNotificationBackground && onKeyguard());
             }
-        }, HIGH_PRIORITY, Settings.Secure.NOTIFICATION_DISMISS_RTL);
+        }, HIGH_PRIORITY, Settings.Secure.NOTIFICATION_DISMISS_RTL,
+                LOCKSCREEN_TRANSLUCENT_NOTIFICATIONS_BG_ENABLED);
+
+        mDeviceProvisionedController.addCallback(
+                new DeviceProvisionedListener() {
+                    @Override
+                    public void onDeviceProvisionedChanged() {
+                        updateCurrentUserIsSetup();
+                    }
+
+                    @Override
+                    public void onUserSwitched() {
+                        updateCurrentUserIsSetup();
+                    }
+
+                    @Override
+                    public void onUserSetupChanged() {
+                        updateCurrentUserIsSetup();
+                    }
+
+                    private void updateCurrentUserIsSetup() {
+                        setCurrentUserSetup(mDeviceProvisionedController.isCurrentUserSetup());
+                    }
+                });
 
         mEntryManager.addNotificationEntryListener(new NotificationEntryListener() {
             @Override
@@ -685,9 +721,13 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     @VisibleForTesting
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
     public void updateFooter() {
+        if (mFooterView == null) {
+            return;
+        }
         boolean showDismissView = mClearAllEnabled && hasActiveClearableNotifications(ROWS_ALL);
         boolean showFooterView = (showDismissView ||
                 mEntryManager.getNotificationData().getActiveNotifications().size() != 0)
+                && mIsCurrentUserSetup  // see: b/193149550
                 && mStatusBarState != StatusBarState.KEYGUARD
                 && !mRemoteInputManager.getController().isRemoteInputActive();
 
@@ -771,7 +811,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
     @ShadeViewRefactor(RefactorComponent.DECORATOR)
     protected void onDraw(Canvas canvas) {
-        if (mShouldDrawNotificationBackground
+        if ((mShouldDrawNotificationBackground || !onKeyguard())
                 && (mSections[0].getCurrentBounds().top
                 < mSections[NUM_SECTIONS - 1].getCurrentBounds().bottom
                 || mAmbientState.isDozing())) {
@@ -945,7 +985,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
     private void updateBackgroundDimming() {
         // No need to update the background color if it's not being drawn.
-        if (!mShouldDrawNotificationBackground) {
+        if (!mShouldDrawNotificationBackground && onKeyguard()) {
             return;
         }
 
@@ -2469,7 +2509,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
     private void updateBackground() {
         // No need to update the background color if it's not being drawn.
-        if (!mShouldDrawNotificationBackground) {
+        if (!mShouldDrawNotificationBackground && onKeyguard()) {
             return;
         }
 
@@ -3771,9 +3811,16 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         initVelocityTrackerIfNotExists();
         mVelocityTracker.addMovement(ev);
 
-        final int action = ev.getAction();
+        final int action = ev.getActionMasked();
+        if (ev.findPointerIndex(mActivePointerId) == -1 && action != MotionEvent.ACTION_DOWN) {
+            // Incomplete gesture, possibly due to window swap mid-gesture. Ignore until a new
+            // one starts.
+            Log.e(TAG, "Invalid pointerId=" + mActivePointerId + " in onTouchEvent "
+                    + MotionEvent.actionToString(ev.getActionMasked()));
+            return true;
+        }
 
-        switch (action & MotionEvent.ACTION_MASK) {
+        switch (action) {
             case MotionEvent.ACTION_DOWN: {
                 if (getChildCount() == 0 || !isInContentBounds(ev)) {
                     return false;
@@ -4602,7 +4649,8 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
     }
 
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
-    private void setHideSensitive(boolean hideSensitive, boolean animate) {
+    private void updateSensitiveness(boolean animate) {
+        boolean hideSensitive = mLockscreenUserManager.isAnyProfilePublicMode();
         if (hideSensitive != mAmbientState.isHideSensitive()) {
             int childCount = getChildCount();
             for (int i = 0; i < childCount; i++) {
@@ -5306,7 +5354,7 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
         SysuiStatusBarStateController state = (SysuiStatusBarStateController)
                 Dependency.get(StatusBarStateController.class);
-        setHideSensitive(publicMode, state.goingToFullShade() /* animate */);
+        updateSensitiveness(state.goingToFullShade() /* animate */);
         setDimmed(onKeyguard, state.fromShadeLocked() /* animate */);
         setExpandingEnabled(!onKeyguard);
         ActivatableNotificationView activatedChild = getActivatedChild();
@@ -5320,6 +5368,8 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
 
         mEntryManager.updateNotifications();
         updateVisibility();
+
+        setWillNotDraw(!mShouldDrawNotificationBackground && onKeyguard);
     }
 
     @ShadeViewRefactor(RefactorComponent.SHADE_VIEW)
@@ -5725,6 +5775,16 @@ public class NotificationStackScrollLayout extends ViewGroup implements ScrollAd
         // The total distance required to fully reveal the header
         float totalDistance = getIntrinsicPadding();
         return MathUtils.smoothStep(0, totalDistance, dragDownAmount);
+    }
+
+    /**
+     * Sets whether the current user is set up, which is required to show the footer (b/193149550)
+     */
+    public void setCurrentUserSetup(boolean isCurrentUserSetup) {
+        if (mIsCurrentUserSetup != isCurrentUserSetup) {
+            mIsCurrentUserSetup = isCurrentUserSetup;
+            updateFooter();
+        }
     }
 
     /**

@@ -326,6 +326,8 @@ public class ClientModeImpl extends StateMachine {
     private NetworkInfo mNetworkInfo;
     private SupplicantStateTracker mSupplicantStateTracker;
 
+    private int mWifiLinkLayerStatsSupported = 4; // Temporary disable
+
     // Indicates that framework is attempting to roam, set true on CMD_START_ROAM, set false when
     // wifi connects or fails to connect
     private boolean mIsAutoRoaming = false;
@@ -1265,15 +1267,20 @@ public class ClientModeImpl extends StateMachine {
             loge("getWifiLinkLayerStats called without an interface");
             return null;
         }
+        WifiLinkLayerStats stats = null;
         mLastLinkLayerStatsUpdate = mClock.getWallClockMillis();
-        WifiLinkLayerStats stats = mWifiNative.getWifiLinkLayerStats(mInterfaceName);
-        if (stats != null) {
-            mOnTime = stats.on_time;
-            mTxTime = stats.tx_time;
-            mRxTime = stats.rx_time;
-            mRunningBeaconCount = stats.beacon_rx;
-            mWifiInfo.updatePacketRates(stats, mLastLinkLayerStatsUpdate);
-        } else {
+        if (mWifiLinkLayerStatsSupported > 0) {
+            stats = mWifiNative.getWifiLinkLayerStats(mInterfaceName);
+            if (stats == null) {
+                mWifiLinkLayerStatsSupported -= 1;
+            } else {
+                mOnTime = stats.on_time;
+                mTxTime = stats.tx_time;
+                mRxTime = stats.rx_time;
+                mRunningBeaconCount = stats.beacon_rx;
+                mWifiInfo.updatePacketRates(stats, mLastLinkLayerStatsUpdate);
+            }
+        } else { // LinkLayerStats are broken or unsupported
             long mTxPkts = mFacade.getTxPackets(mInterfaceName);
             long mRxPkts = mFacade.getRxPackets(mInterfaceName);
             mWifiInfo.updatePacketRates(mTxPkts, mRxPkts, mLastLinkLayerStatsUpdate);
@@ -3627,6 +3634,10 @@ public class ClientModeImpl extends StateMachine {
                     mTemporarilyDisconnectWifi = (message.arg1 == 1);
                     replyToMessage(message, WifiP2pServiceImpl.DISCONNECT_WIFI_RESPONSE);
                     break;
+                case WifiP2pServiceImpl.SET_MIRACAST_MODE:
+                    if (mVerboseLoggingEnabled) logd("SET_MIRACAST_MODE: " + (int)message.arg1);
+                    mWifiConnectivityManager.saveMiracastMode((int)message.arg1);
+                    break;
                 /* Link configuration (IP address, DNS, ...) changes notified via netlink */
                 case CMD_UPDATE_LINKPROPERTIES:
                     updateLinkProperties((LinkProperties) message.obj);
@@ -5353,12 +5364,17 @@ public class ClientModeImpl extends StateMachine {
             final WifiConfiguration currentConfig = getCurrentWifiConfiguration();
             final boolean isUsingStaticIp =
                     (currentConfig.getIpAssignment() == IpConfiguration.IpAssignment.STATIC);
+            final boolean isUsingMacRandomization =
+                    currentConfig.macRandomizationSetting
+                            == WifiConfiguration.RANDOMIZATION_PERSISTENT
+                            && isConnectedMacRandomizationEnabled();
             if (mVerboseLoggingEnabled) {
                 final String key = currentConfig.configKey();
                 log("enter ObtainingIpState netId=" + Integer.toString(mLastNetworkId)
                         + " " + key + " "
                         + " roam=" + mIsAutoRoaming
-                        + " static=" + isUsingStaticIp);
+                        + " static=" + isUsingStaticIp
+                        + " randomMac=" + isUsingMacRandomization);
             }
 
             // Send event to CM & network change broadcast
@@ -5387,25 +5403,26 @@ public class ClientModeImpl extends StateMachine {
                     mIpClient.setTcpBufferSizes(mTcpBufferSizes);
                 }
             }
-            final ProvisioningConfiguration prov;
+            final ProvisioningConfiguration.Builder prov;
             if (!isUsingStaticIp) {
                 prov = new ProvisioningConfiguration.Builder()
                             .withPreDhcpAction()
                             .withApfCapabilities(mWifiNative.getApfCapabilities(mInterfaceName))
                             .withNetwork(getCurrentNetwork())
-                            .withDisplayName(currentConfig.SSID)
-                            .build();
+                            .withDisplayName(currentConfig.SSID);
+                if (isUsingMacRandomization) {
+                    prov.withRandomMacAddress();
+                }
             } else {
                 StaticIpConfiguration staticIpConfig = currentConfig.getStaticIpConfiguration();
                 prov = new ProvisioningConfiguration.Builder()
                             .withStaticConfiguration(staticIpConfig)
                             .withApfCapabilities(mWifiNative.getApfCapabilities(mInterfaceName))
                             .withNetwork(getCurrentNetwork())
-                            .withDisplayName(currentConfig.SSID)
-                            .build();
+                            .withDisplayName(currentConfig.SSID);
             }
             if (mIpClient != null) {
-                mIpClient.startProvisioning(prov);
+                mIpClient.startProvisioning(prov.build());
             }
             // Get Link layer stats so as we get fresh tx packet counters
             getWifiLinkLayerStats();

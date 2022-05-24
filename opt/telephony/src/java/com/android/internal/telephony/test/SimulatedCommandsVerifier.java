@@ -839,6 +839,11 @@ public class SimulatedCommandsVerifier implements CommandsInterface {
     }
 
     @Override
+    public void sendCdmaSms(byte[] pdu, Message response, boolean expectMore) {
+
+    }
+
+    @Override
     public void sendImsGsmSms(String smscPDU, String pdu, int retry, int messageRef,
                               Message response) {
 
@@ -1298,8 +1303,7 @@ public class SimulatedCommandsVerifier implements CommandsInterface {
     }
 
     @Override
-    public void setUiccSubscription(int slotId, int appIndex, int subId, int subStatus,
-                                    Message result) {
+    public void setUiccSubscription(int appIndex, boolean activate, Message result) {
 
     }
 

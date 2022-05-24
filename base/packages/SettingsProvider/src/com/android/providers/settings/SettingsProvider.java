@@ -226,6 +226,7 @@ public class SettingsProvider extends ContentProvider {
     private static final Set<String> CRITICAL_SECURE_SETTINGS = new ArraySet<>();
     static {
         CRITICAL_SECURE_SETTINGS.add(Settings.Secure.USER_SETUP_COMPLETE);
+        CRITICAL_SECURE_SETTINGS.add(Settings.Secure.TV_USER_SETUP_COMPLETE);
     }
 
     // Per user secure settings that moved to the for all users global settings.
@@ -1135,6 +1136,9 @@ public class SettingsProvider extends ContentProvider {
         if (DEBUG) {
             Slog.v(LOG_TAG, "getAllConfigFlags() for " + prefix);
         }
+
+        DeviceConfig.enforceReadPermission(getContext(),
+                prefix != null ? prefix.split("/")[0] : null);
 
         synchronized (mLock) {
             // Get the settings.
@@ -3739,6 +3743,18 @@ public class SettingsProvider extends ContentProvider {
 
                 if (currentVersion == 144) {
                     // Version 145: Removed
+                    // Repurpose for AndroidTV devices coming from N
+                    final SettingsState secureSettings = getSecureSettingsLocked(userId);
+                    String defaultTvSetupSetting = (getContext().getResources().getString(
+                            R.string.def_tv_user_setup_complete));
+                    String currentUserSetupSetting = secureSettings.getSettingLocked(
+                            Settings.Secure.USER_SETUP_COMPLETE).getValue();
+                    if (defaultTvSetupSetting != null && !defaultTvSetupSetting.isEmpty() &&
+                            currentUserSetupSetting == "1") {
+                        secureSettings.insertSettingLocked(
+                                Settings.Secure.TV_USER_SETUP_COMPLETE, "1",
+                                null, true, SettingsState.SYSTEM_PACKAGE_NAME);
+                    }
                     currentVersion = 145;
                 }
 
@@ -4445,6 +4461,54 @@ public class SettingsProvider extends ContentProvider {
                             getContext().getResources().getBoolean(
                                     R.bool.def_notification_bubbles) ? "1" : "0", null /* tag */,
                             true /* makeDefault */, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    // Version 182 (part 2): Reset the default for system sounds.
+                    final SettingsState globalSettings = getGlobalSettingsLocked();
+
+                    globalSettings.updateSettingLocked(Settings.Global.CAR_DOCK_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_car_dock_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    globalSettings.updateSettingLocked(Settings.Global.CAR_UNDOCK_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_car_undock_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    globalSettings.updateSettingLocked(Settings.Global.CHARGING_STARTED_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_charging_started_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    globalSettings.updateSettingLocked(Settings.Global.DESK_DOCK_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_desk_dock_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    globalSettings.updateSettingLocked(Settings.Global.DESK_UNDOCK_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_desk_undock_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    globalSettings.updateSettingLocked(Settings.Global.LOCK_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_lock_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    globalSettings.updateSettingLocked(Settings.Global.UNLOCK_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_unlock_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    globalSettings.updateSettingLocked(Settings.Global.LOW_BATTERY_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_low_battery_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
+
+                    globalSettings.updateSettingLocked(Settings.Global.TRUSTED_SOUND,
+                            getContext().getResources().getString(
+                                R.string.def_trusted_sound), null,
+                            true, SettingsState.SYSTEM_PACKAGE_NAME);
 
                     currentVersion = 183;
                 }

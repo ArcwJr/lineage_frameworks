@@ -288,6 +288,15 @@
     <!-- The padding on the global screenshot background image -->
     <dimen name="global_screenshot_bg_padding">20dp</dimen>
 
+    <!-- The width of the partial screenshot border resize handles -->
+    <dimen name="global_screenshot_selector_border_width">4dp</dimen>
+
+    <!-- The width of the partial screenshot corner resize handles -->
+    <dimen name="global_screenshot_selector_corner_width">8dp</dimen>
+
+    <!-- The size of the area around a resize handle used for touch detection -->
+    <dimen name="global_screenshot_selector_touch_width">30dp</dimen>
+
     <!-- The width of the view containing navigation buttons -->
     <dimen name="navigation_key_width">70dp</dimen>
 
@@ -385,7 +394,7 @@
     <!-- The width of the panel that holds the quick settings. -->
     <dimen name="qs_panel_width">@dimen/notification_panel_width</dimen>
 
-    <dimen name="volume_dialog_panel_transparent_padding_right">4dp</dimen>
+    <dimen name="volume_dialog_panel_transparent_padding_horizontal">4dp</dimen>
 
     <dimen name="volume_dialog_panel_transparent_padding">20dp</dimen>
 
@@ -487,7 +496,7 @@
     <dimen name="qs_data_usage_usage_text_size">36sp</dimen>
     <dimen name="qs_battery_padding">2dp</dimen>
     <dimen name="qs_detail_padding_start">16dp</dimen>
-    <dimen name="qs_detail_items_padding_top">4dp</dimen>
+    <dimen name="qs_detail_items_padding_top">16dp</dimen>
     <dimen name="qs_detail_item_icon_size">24dp</dimen>
     <dimen name="qs_detail_item_icon_width">32dp</dimen>
     <dimen name="qs_detail_item_icon_marginStart">0dp</dimen>
@@ -1156,4 +1165,9 @@
 
     <!-- Size of the RAT type for CellularTile -->
     <dimen name="celltile_rat_type_size">10sp</dimen>
+
+    <!--  Allow CornerHandleView and PathSpecCornerPathRenderer to decouple from corner-radius -->
+    <dimen name="config_rounded_mask_size">@*android:dimen/rounded_corner_radius</dimen>
+    <dimen name="config_rounded_mask_size_top">@*android:dimen/rounded_corner_radius_top</dimen>
+    <dimen name="config_rounded_mask_size_bottom">@*android:dimen/rounded_corner_radius_top</dimen>
 </resources>

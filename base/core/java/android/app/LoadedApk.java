@@ -784,6 +784,11 @@ public final class LoadedApk {
         makePaths(mActivityThread, isBundledApp, mApplicationInfo, zipPaths, libPaths);
 
         String libraryPermittedPath = mDataDir;
+        if (mActivityThread == null) {
+            // In a zygote context where mActivityThread is null we can't access the app data dir
+            // and including this in libraryPermittedPath would cause SELinux denials.
+            libraryPermittedPath = "";
+        }
 
         if (isBundledApp) {
             // For bundled apps, add the base directory of the app (e.g.,
@@ -1247,7 +1252,7 @@ public final class LoadedApk {
         final int N = packageIdentifiers.size();
         for (int i = 0; i < N; i++) {
             final int id = packageIdentifiers.keyAt(i);
-            if (id == 0x01 || id == 0x7f) {
+            if (id == 0x01 || id == 0x7f || id == 0x3f) {
                 continue;
             }
 

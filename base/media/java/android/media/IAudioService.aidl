@@ -38,6 +38,7 @@ import android.media.audiopolicy.AudioVolumeGroup;
 import android.media.audiopolicy.IAudioPolicyCallback;
 import android.media.projection.IMediaProjection;
 import android.net.Uri;
+import android.view.KeyEvent;
 
 /**
  * {@hide}
@@ -75,6 +76,9 @@ interface IAudioService {
 
     @UnsupportedAppUsage
     void setStreamVolume(int streamType, int index, int flags, String callingPackage);
+
+    oneway void handleVolumeKey(in KeyEvent event, boolean isOnTv,
+            String callingPackage, String caller);
 
     boolean isStreamMute(int streamType);
 
@@ -178,6 +182,9 @@ interface IAudioService {
 
     void handleBluetoothA2dpDeviceConfigChange(in BluetoothDevice device);
 
+    void handleBluetoothA2dpActiveDeviceChange(in BluetoothDevice device,
+            int state, int profile, boolean suppressNoisyIntent, int a2dpVolume);
+
     @UnsupportedAppUsage
     AudioRoutesInfo startWatchingRoutes(in IAudioRoutesObserver observer);
 
@@ -258,6 +265,10 @@ interface IAudioService {
     int removeUidDeviceAffinity(in IAudioPolicyCallback pcb, in int uid);
 
     boolean hasHapticChannels(in Uri uri);
+
+    int setAllowedCapturePolicy(in int capturePolicy);
+
+    int getAllowedCapturePolicy();
 
     // WARNING: read warning at top of file, new methods that need to be used by native
     // code via IAudioManager.h need to be added to the top section.

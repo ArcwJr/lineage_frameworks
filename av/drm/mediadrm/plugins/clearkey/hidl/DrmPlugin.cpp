@@ -111,6 +111,8 @@ void DrmPlugin::initProperties() {
 // The content in this secure stop is implementation dependent, the clearkey
 // secureStop does not serve as a reference implementation.
 void DrmPlugin::installSecureStop(const hidl_vec<uint8_t>& sessionId) {
+    Mutex::Autolock lock(mSecureStopLock);
+
     ClearkeySecureStop clearkeySecureStop;
     clearkeySecureStop.id = uint32ToVector(++mNextSecureStopId);
     clearkeySecureStop.data.assign(sessionId.begin(), sessionId.end());
@@ -213,6 +215,7 @@ Status_V1_2 DrmPlugin::getKeyRequestCommon(const hidl_vec<uint8_t>& scope,
         if (requestString.find(kOfflineLicense) != std::string::npos) {
             std::string emptyResponse;
             std::string keySetIdString(keySetId.begin(), keySetId.end());
+            Mutex::Autolock lock(mFileHandleLock);
             if (!mFileHandle.StoreLicense(keySetIdString,
                     DeviceFiles::kLicenseStateReleasing,
                     emptyResponse)) {
@@ -297,6 +300,7 @@ Return<void> DrmPlugin::getKeyRequest_1_2(
 }
 
 void DrmPlugin::setPlayPolicy() {
+    android::Mutex::Autolock lock(mPlayPolicyLock);
     mPlayPolicy.clear();
 
     KeyValue policy;
@@ -327,6 +331,7 @@ bool DrmPlugin::makeKeySetId(std::string* keySetId) {
         }
         *keySetId = kKeySetIdPrefix + ByteArrayToHexString(
                 reinterpret_cast<const uint8_t*>(randomData.data()), randomData.size());
+        Mutex::Autolock lock(mFileHandleLock);
         if (mFileHandle.LicenseExists(*keySetId)) {
             // collision, regenerate
             ALOGV("Retry generating KeySetId");
@@ -379,6 +384,7 @@ Return<void> DrmPlugin::provideKeyResponse(
     if (status == Status::OK) {
         if (isOfflineLicense) {
             if (isRelease) {
+                Mutex::Autolock lock(mFileHandleLock);
                 mFileHandle.DeleteLicense(keySetId);
             } else {
                 if (!makeKeySetId(&keySetId)) {
@@ -386,6 +392,7 @@ Return<void> DrmPlugin::provideKeyResponse(
                     return Void();
                 }
 
+                Mutex::Autolock lock(mFileHandleLock);
                 bool ok = mFileHandle.StoreLicense(
                         keySetId,
                         DeviceFiles::kLicenseStateActive,
@@ -440,6 +447,7 @@ Return<Status> DrmPlugin::restoreKeys(
         DeviceFiles::LicenseState licenseState;
         std::string offlineLicense;
         Status status = Status::OK;
+        Mutex::Autolock lock(mFileHandleLock);
         if (!mFileHandle.RetrieveLicense(std::string(keySetId.begin(), keySetId.end()),
                 &licenseState, &offlineLicense)) {
             ALOGE("Failed to restore offline license");
@@ -562,7 +570,6 @@ Return<Status> DrmPlugin::setPropertyByteArray(
 Return<void> DrmPlugin::queryKeyStatus(
         const hidl_vec<uint8_t>& sessionId,
         queryKeyStatus_cb _hidl_cb) {
-
     if (sessionId.size() == 0) {
         // Returns empty key status KeyValue pair
         _hidl_cb(Status::BAD_VALUE, hidl_vec<KeyValue>());
@@ -572,12 +579,14 @@ Return<void> DrmPlugin::queryKeyStatus(
     std::vector<KeyValue> infoMapVec;
     infoMapVec.clear();
 
+    mPlayPolicyLock.lock();
     KeyValue keyValuePair;
     for (size_t i = 0; i < mPlayPolicy.size(); ++i) {
         keyValuePair.key = mPlayPolicy[i].key;
         keyValuePair.value = mPlayPolicy[i].value;
         infoMapVec.push_back(keyValuePair);
     }
+    mPlayPolicyLock.unlock();
     _hidl_cb(Status::OK, toHidlVec(infoMapVec));
     return Void();
 }
@@ -690,6 +699,7 @@ Return<void> DrmPlugin::getMetrics(getMetrics_cb _hidl_cb) {
 }
 
 Return<void> DrmPlugin::getOfflineLicenseKeySetIds(getOfflineLicenseKeySetIds_cb _hidl_cb) {
+    Mutex::Autolock lock(mFileHandleLock);
     std::vector<std::string> licenseNames = mFileHandle.ListLicenses();
     std::vector<KeySetId> keySetIds;
     if (mMockError != Status_V1_2::OK) {
@@ -710,6 +720,7 @@ Return<Status> DrmPlugin::removeOfflineLicense(const KeySetId& keySetId) {
         return toStatus_1_0(mMockError);
     }
     std::string licenseName(keySetId.begin(), keySetId.end());
+    Mutex::Autolock lock(mFileHandleLock);
     if (mFileHandle.DeleteLicense(licenseName)) {
         return Status::OK;
     }
@@ -718,6 +729,8 @@ Return<Status> DrmPlugin::removeOfflineLicense(const KeySetId& keySetId) {
 
 Return<void> DrmPlugin::getOfflineLicenseState(const KeySetId& keySetId,
         getOfflineLicenseState_cb _hidl_cb) {
+    Mutex::Autolock lock(mFileHandleLock);
+
     std::string licenseName(keySetId.begin(), keySetId.end());
     DeviceFiles::LicenseState state;
     std::string license;
@@ -744,6 +757,7 @@ Return<void> DrmPlugin::getOfflineLicenseState(const KeySetId& keySetId,
 }
 
 Return<void> DrmPlugin::getSecureStops(getSecureStops_cb _hidl_cb) {
+    mSecureStopLock.lock();
     std::vector<SecureStop> stops;
     for (auto itr = mSecureStops.begin(); itr != mSecureStops.end(); ++itr) {
         ClearkeySecureStop clearkeyStop = itr->second;
@@ -755,26 +769,32 @@ Return<void> DrmPlugin::getSecureStops(getSecureStops_cb _hidl_cb) {
         stop.opaqueData = toHidlVec(stopVec);
         stops.push_back(stop);
     }
+    mSecureStopLock.unlock();
+
     _hidl_cb(Status::OK, stops);
     return Void();
 }
 
 Return<void> DrmPlugin::getSecureStop(const hidl_vec<uint8_t>& secureStopId,
         getSecureStop_cb _hidl_cb) {
-    SecureStop stop;
+    std::vector<uint8_t> stopVec;
+
+    mSecureStopLock.lock();
     auto itr = mSecureStops.find(toVector(secureStopId));
     if (itr != mSecureStops.end()) {
         ClearkeySecureStop clearkeyStop = itr->second;
-        std::vector<uint8_t> stopVec;
         stopVec.insert(stopVec.end(), clearkeyStop.id.begin(), clearkeyStop.id.end());
         stopVec.insert(stopVec.end(), clearkeyStop.data.begin(), clearkeyStop.data.end());
+    }
+    mSecureStopLock.unlock();
 
+    SecureStop stop;
+    if (!stopVec.empty()) {
         stop.opaqueData = toHidlVec(stopVec);
         _hidl_cb(Status::OK, stop);
     } else {
         _hidl_cb(Status::BAD_VALUE, stop);
     }
-
     return Void();
 }
 
@@ -787,10 +807,12 @@ Return<Status> DrmPlugin::releaseAllSecureStops() {
 }
 
 Return<void> DrmPlugin::getSecureStopIds(getSecureStopIds_cb _hidl_cb) {
+    mSecureStopLock.lock();
     std::vector<SecureStopId> ids;
     for (auto itr = mSecureStops.begin(); itr != mSecureStops.end(); ++itr) {
         ids.push_back(itr->first);
     }
+    mSecureStopLock.unlock();
 
     _hidl_cb(Status::OK, toHidlVec(ids));
     return Void();
@@ -856,6 +878,8 @@ Return<Status> DrmPlugin::releaseSecureStops(const SecureStopRelease& ssRelease)
 }
 
 Return<Status> DrmPlugin::removeSecureStop(const hidl_vec<uint8_t>& secureStopId) {
+    Mutex::Autolock lock(mSecureStopLock);
+
     if (1 != mSecureStops.erase(toVector(secureStopId))) {
         return Status::BAD_VALUE;
     }
@@ -863,6 +887,8 @@ Return<Status> DrmPlugin::removeSecureStop(const hidl_vec<uint8_t>& secureStopId
 }
 
 Return<Status> DrmPlugin::removeAllSecureStops() {
+    Mutex::Autolock lock(mSecureStopLock);
+
     mSecureStops.clear();
     mNextSecureStopId = kSecureStopIdStart;
     return Status::OK;

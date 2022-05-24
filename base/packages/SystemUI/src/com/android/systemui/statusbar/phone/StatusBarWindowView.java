@@ -34,6 +34,7 @@ import android.media.AudioManager;
 import android.media.session.MediaSessionLegacyHelper;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.os.UserHandle;
 import android.provider.Settings;
@@ -65,11 +66,11 @@ import com.android.systemui.R;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.DragDownHelper;
-import com.android.systemui.statusbar.StatusBarState;
-import com.android.systemui.statusbar.notification.DynamicPrivacyController;
 import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout;
 import com.android.systemui.statusbar.phone.ScrimController.ScrimVisibility;
 import com.android.systemui.tuner.TunerService;
+
+import lineageos.providers.LineageSettings;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -81,6 +82,9 @@ public class StatusBarWindowView extends FrameLayout {
     public static final String TAG = "StatusBarWindowView";
     public static final boolean DEBUG = StatusBar.DEBUG;
 
+    private static final String DOUBLE_TAP_SLEEP_GESTURE =
+            "lineagesystem:" + LineageSettings.System.DOUBLE_TAP_SLEEP_GESTURE;
+
     private final GestureDetector mGestureDetector;
     private final StatusBarStateController mStatusBarStateController;
     private boolean mDoubleTapEnabled;
@@ -91,6 +95,7 @@ public class StatusBarWindowView extends FrameLayout {
     private View mBrightnessMirror;
     private LockIcon mLockIcon;
     private PhoneStatusBarView mStatusBarView;
+    private PhoneStatusBarTransitions mBarTransitions;
 
     private int mRightInset = 0;
     private int mLeftInset = 0;
@@ -98,6 +103,9 @@ public class StatusBarWindowView extends FrameLayout {
     private StatusBar mService;
     private final Paint mTransparentSrcPaint = new Paint();
     private FalsingManager mFalsingManager;
+
+    private boolean mDoubleTapToSleepEnabled;
+    private int mQuickQsOffsetHeight;
 
     // Implements the floating action mode for TextView's Cut/Copy/Past menu. Normally provided by
     // DecorView, but since this is a special window we have to roll our own.
@@ -110,6 +118,8 @@ public class StatusBarWindowView extends FrameLayout {
     private boolean mExpandAnimationRunning;
     private boolean mExpandAnimationPending;
     private boolean mSuppressingWakeUpGesture;
+
+    private boolean mDoubleTapEnabledNative;
 
     private final GestureDetector.SimpleOnGestureListener mGestureListener =
             new GestureDetector.SimpleOnGestureListener() {
@@ -125,7 +135,15 @@ public class StatusBarWindowView extends FrameLayout {
 
         @Override
         public boolean onDoubleTap(MotionEvent e) {
-            if (mDoubleTapEnabled || mSingleTapEnabled) {
+            if (!mService.isDozing() && mDoubleTapToSleepEnabled
+                    && e.getY() < mQuickQsOffsetHeight) {
+                PowerManager pm = mContext.getSystemService(PowerManager.class);
+                if (pm != null) {
+                    pm.goToSleep(e.getEventTime());
+                }
+                return true;
+            }
+            if (mDoubleTapEnabled || mSingleTapEnabled || mDoubleTapEnabledNative) {
                 mService.wakeUpIfDozing(SystemClock.uptimeMillis(), StatusBarWindowView.this,
                         "DOUBLE_TAP");
                 return true;
@@ -136,11 +154,18 @@ public class StatusBarWindowView extends FrameLayout {
     private final TunerService.Tunable mTunable = (key, newValue) -> {
         AmbientDisplayConfiguration configuration = new AmbientDisplayConfiguration(mContext);
         switch (key) {
+            case Settings.Secure.DOUBLE_TAP_TO_WAKE:
+                mDoubleTapEnabledNative = TunerService.parseIntegerSwitch(newValue, false);
+                break;
             case Settings.Secure.DOZE_DOUBLE_TAP_GESTURE:
                 mDoubleTapEnabled = configuration.doubleTapGestureEnabled(UserHandle.USER_CURRENT);
                 break;
             case Settings.Secure.DOZE_TAP_SCREEN_GESTURE:
                 mSingleTapEnabled = configuration.tapGestureEnabled(UserHandle.USER_CURRENT);
+                break;
+            case DOUBLE_TAP_SLEEP_GESTURE:
+                mDoubleTapToSleepEnabled = newValue == null || Integer.parseInt(newValue) == 1;
+                break;
         }
     };
 
@@ -160,8 +185,12 @@ public class StatusBarWindowView extends FrameLayout {
         mGestureDetector = new GestureDetector(context, mGestureListener);
         mStatusBarStateController = Dependency.get(StatusBarStateController.class);
         Dependency.get(TunerService.class).addTunable(mTunable,
+                Settings.Secure.DOUBLE_TAP_TO_WAKE,
                 Settings.Secure.DOZE_DOUBLE_TAP_GESTURE,
-                Settings.Secure.DOZE_TAP_SCREEN_GESTURE);
+                Settings.Secure.DOZE_TAP_SCREEN_GESTURE,
+                DOUBLE_TAP_SLEEP_GESTURE);
+        mQuickQsOffsetHeight = getResources().getDimensionPixelSize(
+                com.android.internal.R.dimen.quick_qs_offset_height);
     }
 
     @Override
@@ -181,7 +210,8 @@ public class StatusBarWindowView extends FrameLayout {
             int targetLeft = Math.max(insets.left, leftCutout);
             int targetRight = Math.max(insets.right, rightCutout);
 
-            // Super-special right inset handling, because scrims and backdrop need to ignore it.
+            // Super-special right inset handling, because scrims, backdrop and status bar
+            // container need to ignore it.
             if (targetRight != mRightInset || targetLeft != mLeftInset) {
                 mRightInset = targetRight;
                 mLeftInset = targetLeft;
@@ -282,6 +312,12 @@ public class StatusBarWindowView extends FrameLayout {
 
     public void setStatusBarView(PhoneStatusBarView statusBarView) {
         mStatusBarView = statusBarView;
+        mBarTransitions = new PhoneStatusBarTransitions(statusBarView,
+                findViewById(R.id.status_bar_container));
+    }
+
+    public PhoneStatusBarTransitions getBarTransitions() {
+        return mBarTransitions;
     }
 
     public void setService(StatusBar service) {

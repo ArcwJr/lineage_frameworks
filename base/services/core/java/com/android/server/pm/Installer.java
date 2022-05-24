@@ -85,6 +85,9 @@ public class Installer extends SystemService {
     public static final int FLAG_USE_QUOTA = IInstalld.FLAG_USE_QUOTA;
     public static final int FLAG_FORCE = IInstalld.FLAG_FORCE;
 
+    public static final int FLAG_CLEAR_APP_DATA_KEEP_ART_PROFILES =
+            IInstalld.FLAG_CLEAR_APP_DATA_KEEP_ART_PROFILES;
+
     private final boolean mIsolated;
 
     private volatile IInstalld mInstalld;
@@ -426,16 +429,6 @@ public class Installer extends SystemService {
         if (!checkBeforeRemote()) return;
         try {
             mInstalld.destroyUserData(uuid, userId, flags);
-        } catch (Exception e) {
-            throw InstallerException.from(e);
-        }
-    }
-
-    public void markBootComplete(String instructionSet) throws InstallerException {
-        assertValidInstructionSet(instructionSet);
-        if (!checkBeforeRemote()) return;
-        try {
-            mInstalld.markBootComplete(instructionSet);
         } catch (Exception e) {
             throw InstallerException.from(e);
         }

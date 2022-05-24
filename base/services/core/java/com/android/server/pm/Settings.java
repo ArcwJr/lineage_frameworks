@@ -320,7 +320,7 @@ public final class Settings {
         public void forceCurrent() {
             sdkVersion = Build.VERSION.SDK_INT;
             databaseVersion = CURRENT_DATABASE_VERSION;
-            fingerprint = Build.FINGERPRINT;
+            fingerprint = Build.DATE;
         }
     }
 
@@ -1243,7 +1243,8 @@ public final class Settings {
         return result;
     }
 
-    boolean removeIntentFilterVerificationLPw(String packageName, int userId) {
+    boolean removeIntentFilterVerificationLPw(String packageName, int userId,
+            boolean alsoResetStatus) {
         PackageSetting ps = mPackages.get(packageName);
         if (ps == null) {
             if (DEBUG_DOMAIN_VERIFICATION) {
@@ -1251,7 +1252,9 @@ public final class Settings {
             }
             return false;
         }
-        ps.clearDomainVerificationStatusForUser(userId);
+        if (alsoResetStatus) {
+            ps.clearDomainVerificationStatusForUser(userId);
+        }
         ps.setIntentFilterVerificationInfo(null);
         return true;
     }
@@ -1259,7 +1262,7 @@ public final class Settings {
     boolean removeIntentFilterVerificationLPw(String packageName, int[] userIds) {
         boolean result = false;
         for (int userId : userIds) {
-            result |= removeIntentFilterVerificationLPw(packageName, userId);
+            result |= removeIntentFilterVerificationLPw(packageName, userId, true);
         }
         return result;
     }
@@ -3070,7 +3073,7 @@ public final class Settings {
         // on update drop the files before loading them.
         if (PackageManagerService.CLEAR_RUNTIME_PERMISSIONS_ON_UPGRADE) {
             final VersionInfo internal = getInternalVersion();
-            if (!Build.FINGERPRINT.equals(internal.fingerprint)) {
+            if (!Build.DATE.equals(internal.fingerprint)) {
                 for (UserInfo user : users) {
                     mRuntimePermissionsPersistence.deleteUserRuntimePermissionsFile(user.id);
                 }
@@ -5280,7 +5283,7 @@ public final class Settings {
                 serializer.endDocument();
                 destination.finishWrite(out);
 
-                if (Build.FINGERPRINT.equals(fingerprint)) {
+                if (Build.DATE.equals(fingerprint)) {
                     mDefaultPermissionsGranted.put(userId, true);
                 }
             // Any error while writing is fatal.
@@ -5378,7 +5381,7 @@ public final class Settings {
                         mVersions.put(userId, version);
                         String fingerprint = parser.getAttributeValue(null, ATTR_FINGERPRINT);
                         mFingerprints.put(userId, fingerprint);
-                        final boolean defaultsGranted = Build.FINGERPRINT.equals(fingerprint);
+                        final boolean defaultsGranted = Build.DATE.equals(fingerprint);
                         mDefaultPermissionsGranted.put(userId, defaultsGranted);
                     } break;
 

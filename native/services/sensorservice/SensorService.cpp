@@ -204,15 +204,10 @@ void SensorService::onFirstRef() {
                 // available in the HAL
                 bool needRotationVector =
                         (virtualSensorsNeeds & (1<<SENSOR_TYPE_ROTATION_VECTOR)) != 0;
+                bool needOrientation = orientationIndex == -1;
 
                 registerSensor(new RotationVectorSensor(), !needRotationVector, true);
-                registerSensor(new OrientationSensor(), !needRotationVector, true);
-
-                bool needLinearAcceleration =
-                        (virtualSensorsNeeds & (1<<SENSOR_TYPE_LINEAR_ACCELERATION)) != 0;
-
-                registerSensor(new LinearAccelerationSensor(list, count),
-                               !needLinearAcceleration, true);
+                registerSensor(new OrientationSensor(), !needOrientation, true);
 
                 // virtual debugging sensors are not for user
                 registerSensor( new CorrectedGyroSensor(list, count), true, true);
@@ -222,6 +217,11 @@ void SensorService::onFirstRef() {
             if (hasAccel && hasGyro) {
                 bool needGravitySensor = (virtualSensorsNeeds & (1<<SENSOR_TYPE_GRAVITY)) != 0;
                 registerSensor(new GravitySensor(list, count), !needGravitySensor, true);
+
+                bool needLinearAcceleration =
+                        (virtualSensorsNeeds & (1<<SENSOR_TYPE_LINEAR_ACCELERATION)) != 0;
+                registerSensor(new LinearAccelerationSensor(list, count),
+                               !needLinearAcceleration, true);
 
                 bool needGameRotationVector =
                         (virtualSensorsNeeds & (1<<SENSOR_TYPE_GAME_ROTATION_VECTOR)) != 0;

@@ -877,6 +877,8 @@ private:
     uint32_t mSource;
     int32_t mKeyboardType;
 
+    int32_t mRotationMapOffset; // determines if and how volume keys rotate
+
     std::vector<KeyDown> mKeyDowns; // keys that are down
     int32_t mMetaState;
     nsecs_t mDownTime; // time of most recent key down
@@ -1649,7 +1651,7 @@ private:
     bool isPointInsideSurface(int32_t x, int32_t y);
     const VirtualKey* findVirtualKeyHit(int32_t x, int32_t y);
 
-    static void assignPointerIds(const RawState* last, RawState* current);
+    static void assignPointerIds(const RawState& last, RawState& current);
 
     void reportEventForStatistics(nsecs_t evdevTime);
 

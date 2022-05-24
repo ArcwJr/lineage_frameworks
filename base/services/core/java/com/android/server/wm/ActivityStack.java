@@ -2147,7 +2147,9 @@ class ActivityStack extends ConfigurationContainer {
             boolean aboveTop = top != null;
             final boolean stackShouldBeVisible = shouldBeVisible(starting);
             boolean behindFullscreenActivity = !stackShouldBeVisible;
-            boolean resumeNextActivity = isFocusable() && isInStackLocked(starting) == null;
+            boolean resumeNextActivity = isFocusable()
+                    && getVisibility(starting) == STACK_VISIBILITY_VISIBLE
+                    && isInStackLocked(starting) == null;
             for (int taskNdx = mTaskHistory.size() - 1; taskNdx >= 0; --taskNdx) {
                 final TaskRecord task = mTaskHistory.get(taskNdx);
                 final ArrayList<ActivityRecord> activities = task.mActivities;
@@ -2743,7 +2745,7 @@ class ActivityStack extends ConfigurationContainer {
         final boolean resumeWhilePausing = (next.info.flags & FLAG_RESUME_WHILE_PAUSING) != 0
                 && !lastResumedCanPip;
 
-        boolean pausing = getDisplay().pauseBackStacks(userLeaving, next, false);
+        boolean pausing = display.pauseBackStacks(userLeaving, next, false);
         if (mResumedActivity != null) {
             if (DEBUG_STATES) Slog.d(TAG_STATES,
                     "resumeTopActivityLocked: Pausing " + mResumedActivity);
@@ -2759,6 +2761,13 @@ class ActivityStack extends ConfigurationContainer {
             if (next.attachedToProcess()) {
                 next.app.updateProcessInfo(false /* updateServiceConnectionActivities */,
                         true /* activityChange */, false /* updateOomAdj */);
+            } else if (!next.isProcessRunning()) {
+                // Since the start-process is asynchronous, if we already know the process of next
+                // activity isn't running, we can start the process earlier to save the time to wait
+                // for the current activity to be paused.
+                final boolean isTop = this == display.getFocusedStack();
+                mService.startProcessAsync(next, false /* knownToBeDead */, isTop,
+                        isTop ? "pre-top-activity" : "pre-activity");
             }
             if (lastResumed != null) {
                 lastResumed.setWillCloseOrEnterPip(true);
@@ -2827,7 +2836,7 @@ class ActivityStack extends ConfigurationContainer {
         // that the previous one will be hidden soon.  This way it can know
         // to ignore it when computing the desired screen orientation.
         boolean anim = true;
-        final DisplayContent dc = getDisplay().mDisplayContent;
+        final DisplayContent dc = display.mDisplayContent;
         if (prev != null) {
             if (prev.finishing) {
                 if (DEBUG_TRANSITION) Slog.v(TAG_TRANSITION,
@@ -2984,7 +2993,7 @@ class ActivityStack extends ConfigurationContainer {
                 next.clearOptionsLocked();
                 transaction.setLifecycleStateRequest(
                         ResumeActivityItem.obtain(next.app.getReportedProcState(),
-                                getDisplay().mDisplayContent.isNextTransitionForward()));
+                                dc.isNextTransitionForward()));
                 mService.getLifecycleManager().scheduleTransaction(transaction);
 
                 if (DEBUG_STATES) Slog.d(TAG_STATES, "resumeTopActivityLocked: Resumed "
@@ -4112,9 +4121,13 @@ class ActivityStack extends ConfigurationContainer {
         final ActivityDisplay display = getDisplay();
         final ActivityRecord next = display.topRunningActivity(true /* considerKeyguardState */);
         final boolean isFloating = r.getConfiguration().windowConfiguration.tasksAreFloating();
-
-        if (mode == FINISH_AFTER_VISIBLE && (r.visible || r.nowVisible)
-                && next != null && !next.nowVisible && !isFloating) {
+        // isNextNotYetVisible is to check if the next activity is invisible, or it has been
+        // requested to be invisible but its windows haven't reported as invisible. If so, it
+        // implied that the current finishing activity should be added into stopping list rather
+        // than destroying it immediately.
+        final boolean isNextNotYetVisible = next != null && (!next.nowVisible || !next.visible);
+        if (mode == FINISH_AFTER_VISIBLE && (r.visible || r.nowVisible) && isNextNotYetVisible
+                && !isFloating) {
             if (!mStackSupervisor.mStoppingActivities.contains(r)) {
                 addToStopping(r, false /* scheduleIdle */, false /* idleDelayed */,
                         "finishCurrentActivityLocked");
@@ -4257,6 +4270,11 @@ class ActivityStack extends ConfigurationContainer {
 
     final boolean navigateUpToLocked(ActivityRecord srec, Intent destIntent, int resultCode,
             Intent resultData) {
+        if (!srec.attachedToProcess()) {
+            // Nothing to do if the caller is not attached, because this method should be called
+            // from an alive activity.
+            return false;
+        }
         final TaskRecord task = srec.getTaskRecord();
         final ArrayList<ActivityRecord> activities = task.mActivities;
         final int start = activities.indexOf(srec);
@@ -4310,14 +4328,14 @@ class ActivityStack extends ConfigurationContainer {
         }
 
         if (parent != null && foundParentInTask) {
+            final int callingUid = srec.info.applicationInfo.uid;
             final int parentLaunchMode = parent.info.launchMode;
             final int destIntentFlags = destIntent.getFlags();
             if (parentLaunchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE ||
                     parentLaunchMode == ActivityInfo.LAUNCH_SINGLE_TASK ||
                     parentLaunchMode == ActivityInfo.LAUNCH_SINGLE_TOP ||
                     (destIntentFlags & Intent.FLAG_ACTIVITY_CLEAR_TOP) != 0) {
-                parent.deliverNewIntentLocked(srec.info.applicationInfo.uid, destIntent,
-                        srec.packageName);
+                parent.deliverNewIntentLocked(callingUid, destIntent, srec.packageName);
             } else {
                 try {
                     ActivityInfo aInfo = AppGlobals.getPackageManager().getActivityInfo(
@@ -4330,10 +4348,10 @@ class ActivityStack extends ConfigurationContainer {
                             .setActivityInfo(aInfo)
                             .setResultTo(parent.appToken)
                             .setCallingPid(-1)
-                            .setCallingUid(parent.launchedFromUid)
-                            .setCallingPackage(parent.launchedFromPackage)
+                            .setCallingUid(callingUid)
+                            .setCallingPackage(srec.packageName)
                             .setRealCallingPid(-1)
-                            .setRealCallingUid(parent.launchedFromUid)
+                            .setRealCallingUid(callingUid)
                             .setComponentSpecified(true)
                             .execute();
                     foundParentInTask = res == ActivityManager.START_SUCCESS;

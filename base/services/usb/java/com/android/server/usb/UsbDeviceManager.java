@@ -40,6 +40,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
+import android.database.ContentObserver;
 import android.debug.AdbManagerInternal;
 import android.debug.IAdbTransport;
 import android.hardware.usb.ParcelableUsbPort;
@@ -58,6 +59,7 @@ import android.hardware.usb.gadget.V1_0.Status;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
 import android.os.BatteryManager;
+import android.os.Build;
 import android.os.Environment;
 import android.os.FileUtils;
 import android.os.Handler;
@@ -102,6 +104,8 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Scanner;
 import java.util.Set;
+
+import lineageos.providers.LineageSettings;
 
 /**
  * UsbDeviceManager manages USB state in device mode.
@@ -350,6 +354,20 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
         mContext.registerReceiver(languageChangedReceiver,
                 new IntentFilter(Intent.ACTION_LOCALE_CHANGED));
 
+        ContentObserver adbNotificationObserver = new ContentObserver(null) {
+            @Override
+            public void onChange(boolean selfChange) {
+                mHandler.updateAdbNotification(false);
+            }
+        };
+
+        mContentResolver.registerContentObserver(
+                LineageSettings.Secure.getUriFor(LineageSettings.Secure.ADB_NOTIFY),
+                false, adbNotificationObserver);
+        mContentResolver.registerContentObserver(
+                LineageSettings.Secure.getUriFor(LineageSettings.Secure.ADB_PORT),
+                false, adbNotificationObserver);
+
         // Watch for USB configuration changes
         mUEventObserver = new UsbUEventObserver();
         mUEventObserver.startObserving(USB_STATE_MATCH);
@@ -453,7 +471,7 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
 
         private UsbAccessory mCurrentAccessory;
         private int mUsbNotificationId;
-        private boolean mAdbNotificationShown;
+        private int mAdbNotificationId;
         private boolean mUsbCharging;
         private boolean mHideUsbNotification;
         private boolean mSupportsAllCombinations;
@@ -1137,7 +1155,7 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                     }
 
                     Notification.Builder builder = new Notification.Builder(mContext, channel)
-                            .setSmallIcon(com.android.internal.R.drawable.stat_sys_adb)
+                            .setSmallIcon(com.android.internal.R.drawable.stat_sys_data_usb)
                             .setWhen(0)
                             .setOngoing(true)
                             .setTicker(title)
@@ -1173,17 +1191,33 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
         protected void updateAdbNotification(boolean force) {
             if (mNotificationManager == null) return;
             final int id = SystemMessage.NOTE_ADB_ACTIVE;
-            final int titleRes = com.android.internal.R.string.adb_active_notification_title;
+            final int titleRes;
+            boolean usbAdbActive = isAdbEnabled() && mConnected;
+            boolean netAdbActive = isAdbEnabled() &&
+                    LineageSettings.Secure.getInt(mContentResolver,
+                            LineageSettings.Secure.ADB_PORT, -1) > 0;
+            boolean hideNotification = SystemProperties.getInt("persist.adb.notify", -1) == 0
+                    || LineageSettings.Secure.getInt(mContext.getContentResolver(),
+                            LineageSettings.Secure.ADB_NOTIFY, 1) == 0;
 
-            if (isAdbEnabled() && mConnected) {
-                if ("0".equals(getSystemProperty("persist.adb.notify", ""))) return;
+            if (hideNotification) {
+                titleRes = 0;
+            } else if (usbAdbActive && netAdbActive) {
+                titleRes = com.android.internal.R.string.adb_both_active_notification_title;
+            } else if (usbAdbActive) {
+                titleRes = com.android.internal.R.string.adb_active_notification_title;
+            } else if (netAdbActive) {
+                titleRes = com.android.internal.R.string.adb_net_active_notification_title;
+            } else {
+                titleRes = 0;
+            }
 
-                if (force && mAdbNotificationShown) {
-                    mAdbNotificationShown = false;
+            if (titleRes != mAdbNotificationId) {
+                if (mAdbNotificationId != 0) {
                     mNotificationManager.cancelAsUser(null, id, UserHandle.ALL);
                 }
 
-                if (!mAdbNotificationShown) {
+                if (titleRes != 0) {
                     Resources r = mContext.getResources();
                     CharSequence title = r.getText(titleRes);
                     CharSequence message = r.getText(
@@ -1207,18 +1241,17 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                                                     .system_notification_accent_color))
                                     .setContentTitle(title)
                                     .setContentText(message)
+                                    .setSubText(Build.ID)
                                     .setContentIntent(pi)
                                     .setVisibility(Notification.VISIBILITY_PUBLIC)
                                     .extend(new Notification.TvExtender()
                                             .setChannelId(ADB_NOTIFICATION_CHANNEL_ID_TV))
                                     .build();
-                    mAdbNotificationShown = true;
                     mNotificationManager.notifyAsUser(null, id, notification,
                             UserHandle.ALL);
                 }
-            } else if (mAdbNotificationShown) {
-                mAdbNotificationShown = false;
-                mNotificationManager.cancelAsUser(null, id, UserHandle.ALL);
+
+                mAdbNotificationId = titleRes;
             }
         }
 

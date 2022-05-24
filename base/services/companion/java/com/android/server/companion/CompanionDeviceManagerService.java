@@ -25,6 +25,7 @@ import static com.android.internal.util.function.pooled.PooledLambda.obtainRunna
 
 import android.annotation.CheckResult;
 import android.annotation.Nullable;
+import android.app.AppOpsManager;
 import android.app.PendingIntent;
 import android.companion.AssociationRequest;
 import android.companion.CompanionDeviceManager;
@@ -297,7 +298,10 @@ public class CompanionDeviceManagerService extends SystemService implements Bind
 
             checkArgument(getCallingUserId() == userId,
                     "Must be called by either same user or system");
-            mAppOpsManager.checkPackage(Binder.getCallingUid(), pkg);
+            int callingUid = Binder.getCallingUid();
+            if (mAppOpsManager.checkPackage(callingUid, pkg) != AppOpsManager.MODE_ALLOWED) {
+                throw new SecurityException(pkg + " doesn't belong to uid " + callingUid);
+            }
         }
 
         @Override
@@ -316,12 +320,14 @@ public class CompanionDeviceManagerService extends SystemService implements Bind
                             .toString());
             long identity = Binder.clearCallingIdentity();
             try {
-                return PendingIntent.getActivity(getContext(),
+                return PendingIntent.getActivityAsUser(getContext(),
                         0 /* request code */,
                         NotificationAccessConfirmationActivityContract.launcherIntent(
                                 userId, component, packageTitle),
                         PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_ONE_SHOT
-                                | PendingIntent.FLAG_CANCEL_CURRENT);
+                                | PendingIntent.FLAG_CANCEL_CURRENT,
+                        null /* options */,
+                        new UserHandle(userId));
             } finally {
                 Binder.restoreCallingIdentity(identity);
             }
@@ -659,6 +665,11 @@ public class CompanionDeviceManagerService extends SystemService implements Bind
                 + "list USER_ID\n"
                 + "associate USER_ID PACKAGE MAC_ADDRESS\n"
                 + "disassociate USER_ID PACKAGE MAC_ADDRESS";
+
+        ShellCmd() {
+            getContext().enforceCallingOrSelfPermission(
+                    android.Manifest.permission.MANAGE_COMPANION_DEVICES, "ShellCmd");
+        }
 
         @Override
         public int onCommand(String cmd) {

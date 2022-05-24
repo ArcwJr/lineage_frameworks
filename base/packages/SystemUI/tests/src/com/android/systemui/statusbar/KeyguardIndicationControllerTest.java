@@ -223,12 +223,14 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
 
     @Test
     public void onAlignmentStateChanged_showsSlowChargingIndication() {
-        createController();
-        verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
-        mController.setVisible(true);
+        mInstrumentation.runOnMainSync(() -> {
+            createController();
+            verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
+            mController.setVisible(true);
 
-        mAlignmentListener.getValue().onAlignmentStateChanged(
-                DockManager.ALIGN_STATE_POOR);
+            mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_POOR);
+        });
+        mInstrumentation.waitForIdleSync();
 
         assertThat(mTextView.getText()).isEqualTo(
                 mContext.getResources().getString(R.string.dock_alignment_slow_charging));
@@ -238,11 +240,14 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
 
     @Test
     public void onAlignmentStateChanged_showsNotChargingIndication() {
-        createController();
-        verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
-        mController.setVisible(true);
+        mInstrumentation.runOnMainSync(() -> {
+            createController();
+            verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
+            mController.setVisible(true);
 
-        mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_TERRIBLE);
+            mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_TERRIBLE);
+        });
+        mInstrumentation.waitForIdleSync();
 
         assertThat(mTextView.getText()).isEqualTo(
                 mContext.getResources().getString(R.string.dock_alignment_not_charging));
@@ -252,13 +257,15 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
 
     @Test
     public void onAlignmentStateChanged_whileDozing_showsSlowChargingIndication() {
-        createController();
-        verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
-        mController.setVisible(true);
-        mController.setDozing(true);
+        mInstrumentation.runOnMainSync(() -> {
+            createController();
+            verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
+            mController.setVisible(true);
+            mController.setDozing(true);
 
-        mAlignmentListener.getValue().onAlignmentStateChanged(
-                DockManager.ALIGN_STATE_POOR);
+            mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_POOR);
+        });
+        mInstrumentation.waitForIdleSync();
 
         assertThat(mTextView.getText()).isEqualTo(
                 mContext.getResources().getString(R.string.dock_alignment_slow_charging));
@@ -268,12 +275,15 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
 
     @Test
     public void onAlignmentStateChanged_whileDozing_showsNotChargingIndication() {
-        createController();
-        verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
-        mController.setVisible(true);
-        mController.setDozing(true);
+        mInstrumentation.runOnMainSync(() -> {
+            createController();
+            verify(mDockManager).addAlignmentStateListener(mAlignmentListener.capture());
+            mController.setVisible(true);
+            mController.setDozing(true);
 
-        mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_TERRIBLE);
+            mAlignmentListener.getValue().onAlignmentStateChanged(DockManager.ALIGN_STATE_TERRIBLE);
+        });
+        mInstrumentation.waitForIdleSync();
 
         assertThat(mTextView.getText()).isEqualTo(
                 mContext.getResources().getString(R.string.dock_alignment_not_charging));
@@ -409,6 +419,20 @@ public class KeyguardIndicationControllerTest extends SysuiTestCase {
         when(mKeyguardUpdateMonitor.getUserHasTrust(anyInt())).thenReturn(false);
         mController.onUnlockMethodStateChanged();
         assertThat(mTextView.getText()).isEqualTo(restingIndication);
+    }
+
+    @Test
+    public void unlockMethodCache_listenerUpdatesPluggedIndication() {
+        createController();
+        when(mKeyguardUpdateMonitor.getUserHasTrust(anyInt())).thenReturn(true);
+        mController.setPowerPluggedIn(true);
+        mController.setVisible(true);
+        String powerIndication = mController.computePowerIndication();
+        String pluggedIndication = mContext.getString(R.string.keyguard_indication_trust_unlocked);
+        pluggedIndication = mContext.getString(
+                R.string.keyguard_indication_trust_unlocked_plugged_in,
+                pluggedIndication, powerIndication);
+        assertThat(mTextView.getText()).isEqualTo(pluggedIndication);
     }
 
     @Test

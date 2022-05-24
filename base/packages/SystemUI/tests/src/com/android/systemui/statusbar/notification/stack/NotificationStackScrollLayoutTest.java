@@ -57,6 +57,8 @@ import com.android.systemui.classifier.FalsingManagerFake;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.EmptyShadeView;
+import com.android.systemui.statusbar.NotificationLockscreenUserManager;
+import com.android.systemui.statusbar.NotificationLockscreenUserManager.UserChangedListener;
 import com.android.systemui.statusbar.NotificationPresenter;
 import com.android.systemui.statusbar.NotificationRemoteInputManager;
 import com.android.systemui.statusbar.NotificationShelf;
@@ -119,6 +121,8 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
     @Mock private MetricsLogger mMetricsLogger;
     @Mock private NotificationRoundnessManager mNotificationRoundnessManager;
     @Mock private KeyguardBypassController mKeyguardBypassController;
+    @Mock private NotificationLockscreenUserManager mLockscreenUserManager;
+    private UserChangedListener mUserChangedListener;
     private TestableNotificationEntryManager mEntryManager;
     private int mOriginalInterruptionModelSetting;
 
@@ -138,6 +142,8 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
                 NotificationBlockingHelperManager.class,
                 mBlockingHelperManager);
         mDependency.injectTestDependency(SysuiStatusBarStateController.class, mBarState);
+        mDependency.injectTestDependency(NotificationLockscreenUserManager.class,
+                mLockscreenUserManager);
         mDependency.injectTestDependency(MetricsLogger.class, mMetricsLogger);
         mDependency.injectTestDependency(NotificationRemoteInputManager.class,
                 mRemoteInputManager);
@@ -152,6 +158,8 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
 
 
         NotificationShelf notificationShelf = mock(NotificationShelf.class);
+        ArgumentCaptor<UserChangedListener> userChangedCaptor = ArgumentCaptor
+                .forClass(UserChangedListener.class);
 
         // The actual class under test.  You may need to work with this class directly when
         // testing anonymous class members of mStackScroller, like mMenuEventListener,
@@ -174,6 +182,8 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
         mStackScroller.setGroupManager(mGroupManager);
         mStackScroller.setEmptyShadeView(mEmptyShadeView);
         mStackScroller.setIconAreaController(mNotificationIconAreaController);
+        verify(mLockscreenUserManager).addUserChangedListener(userChangedCaptor.capture());
+        mUserChangedListener = userChangedCaptor.getValue();
 
         // Stub out functionality that isn't necessary to test.
         doNothing().when(mBar)
@@ -247,6 +257,12 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
     }
 
     @Test
+    public void testOnStatePostChange_verifyIfProfileIsPublic() {
+        mUserChangedListener.onUserChanged(0);
+        verify(mLockscreenUserManager).isAnyProfilePublicMode();
+    }
+
+    @Test
     public void manageNotifications_visible() {
         FooterView view = mock(FooterView.class);
         mStackScroller.setFooterView(view);
@@ -283,6 +299,7 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
     @Test
     public void testUpdateFooter_noNotifications() {
         setBarStateForTest(StatusBarState.SHADE);
+        mStackScroller.setCurrentUserSetup(true);
         assertEquals(0, mNotificationData.getActiveNotifications().size());
 
         mStackScroller.updateFooter();
@@ -292,6 +309,8 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
     @Test
     public void testUpdateFooter_remoteInput() {
         setBarStateForTest(StatusBarState.SHADE);
+        mStackScroller.setCurrentUserSetup(true);
+
         ArrayList<NotificationEntry> entries = new ArrayList<>();
         entries.add(mock(NotificationEntry.class));
         when(mNotificationData.getActiveNotifications()).thenReturn(entries);
@@ -309,6 +328,8 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
     @Test
     public void testUpdateFooter_oneClearableNotification() {
         setBarStateForTest(StatusBarState.SHADE);
+        mStackScroller.setCurrentUserSetup(true);
+
         ArrayList<NotificationEntry> entries = new ArrayList<>();
         entries.add(mock(NotificationEntry.class));
         when(mNotificationData.getActiveNotifications()).thenReturn(entries);
@@ -323,8 +344,28 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
     }
 
     @Test
+    public void testUpdateFooter_oneClearableNotification_beforeUserSetup() {
+        setBarStateForTest(StatusBarState.SHADE);
+        mStackScroller.setCurrentUserSetup(false);
+
+        ArrayList<NotificationEntry> entries = new ArrayList<>();
+        entries.add(mock(NotificationEntry.class));
+        when(mNotificationData.getActiveNotifications()).thenReturn(entries);
+
+        ExpandableNotificationRow row = mock(ExpandableNotificationRow.class);
+        when(row.canViewBeDismissed()).thenReturn(true);
+        when(mStackScroller.getChildCount()).thenReturn(1);
+        when(mStackScroller.getChildAt(anyInt())).thenReturn(row);
+
+        mStackScroller.updateFooter();
+        verify(mStackScroller).updateFooterView(false, true);
+    }
+
+    @Test
     public void testUpdateFooter_oneNonClearableNotification() {
         setBarStateForTest(StatusBarState.SHADE);
+        mStackScroller.setCurrentUserSetup(true);
+
         ArrayList<NotificationEntry> entries = new ArrayList<>();
         entries.add(mock(NotificationEntry.class));
         when(mEntryManager.getNotificationData().getActiveNotifications()).thenReturn(entries);
@@ -336,6 +377,8 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
 
     @Test
     public void testUpdateFooter_atEnd() {
+        mStackScroller.setCurrentUserSetup(true);
+
         // add footer
         mStackScroller.inflateFooterView();
 

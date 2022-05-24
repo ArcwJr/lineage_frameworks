@@ -1383,15 +1383,16 @@ public class ServiceState implements Parcelable {
 
     /** @hide */
     public boolean isUsingCarrierAggregation() {
+        boolean isUsingCa = false;
         NetworkRegistrationInfo nri = getNetworkRegistrationInfo(
                 NetworkRegistrationInfo.DOMAIN_PS, AccessNetworkConstants.TRANSPORT_TYPE_WWAN);
         if (nri != null) {
             DataSpecificRegistrationInfo dsri = nri.getDataSpecificInfo();
             if (dsri != null) {
-                return dsri.isUsingCarrierAggregation();
+                isUsingCa = dsri.isUsingCarrierAggregation();
             }
         }
-        return false;
+        return isUsingCa || getCellBandwidths().length > 1;
     }
 
     /** @hide */
@@ -1717,6 +1718,13 @@ public class ServiceState implements Parcelable {
     public static boolean isLte(int radioTechnology) {
         return radioTechnology == RIL_RADIO_TECHNOLOGY_LTE ||
                 radioTechnology == RIL_RADIO_TECHNOLOGY_LTE_CA;
+    }
+
+    /** @hide */
+    public static boolean isPsTech(int radioTechnology) {
+        return radioTechnology == RIL_RADIO_TECHNOLOGY_LTE ||
+                radioTechnology == RIL_RADIO_TECHNOLOGY_LTE_CA ||
+                radioTechnology == RIL_RADIO_TECHNOLOGY_NR;
     }
 
     /** @hide */

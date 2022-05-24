@@ -120,7 +120,7 @@ import javax.inject.Inject;
  * on clicks and view states of the nav bar.
  */
 public class NavigationBarFragment extends LifecycleFragment implements Callbacks,
-        NavigationModeController.ModeChangedListener {
+        NavigationModeController.ModeChangedListener, AutoHideElement {
 
     public static final String TAG = "NavigationBar";
     private static final boolean DEBUG = false;
@@ -542,6 +542,9 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
                 }
                 mAutoHideController.touchAutoHide();
             }
+            if (mNavigationBarView != null) {
+                mNavigationBarView.onSystemUiVisibilityChanged(mSystemUiVisibility);
+            }
         }
         mLightBarController.onNavigationVisibilityChanged(
                 vis, mask, nbModeChanged, mNavigationBarMode, navbarColorManagedByIme);
@@ -664,6 +667,7 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
 
         ButtonDispatcher homeButton = mNavigationBarView.getHomeButton();
         homeButton.setOnTouchListener(this::onHomeTouch);
+        homeButton.setLongClickable(true);
         homeButton.setOnLongClickListener(this::onHomeLongClick);
 
         ButtonDispatcher accessibilityButton = mNavigationBarView.getAccessibilityButton();
@@ -718,19 +722,9 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
                 && ActivityManagerWrapper.getInstance().isScreenPinningActive()) {
             return onLongPressBackHome(v);
         }
-        if (shouldDisableNavbarGestures()) {
-            return false;
-        }
-        mMetricsLogger.action(MetricsEvent.ACTION_ASSIST_LONG_PRESS);
-        Bundle args  = new Bundle();
-        args.putInt(
-                AssistManager.INVOCATION_TYPE_KEY, AssistManager.INVOCATION_HOME_BUTTON_LONG_PRESS);
-        mAssistManager.startAssist(args);
-        mStatusBar.awakenDreams();
-
-        if (mNavigationBarView != null) {
-            mNavigationBarView.abortCurrentGesture();
-        }
+        KeyButtonView keyButtonView = (KeyButtonView) v;
+        keyButtonView.sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.FLAG_LONG_PRESS);
+        keyButtonView.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
         return true;
     }
 
@@ -817,11 +811,15 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
                         // should stop lock task.
                         stopLockTaskMode = true;
                         return true;
-                    } else if (v.getId() == btnId2) {
-                        return btnId2 == R.id.recent_apps
-                                ? onLongPressRecents()
-                                : onHomeLongClick(
-                                        mNavigationBarView.getHomeButton().getCurrentView());
+                    } else if (v.getId() == R.id.recent_apps) {
+                        // Send long press key event so that Lineage button handling can intercept
+                        KeyButtonView keyButtonView = (KeyButtonView) v;
+                        keyButtonView.sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.FLAG_LONG_PRESS);
+                        keyButtonView.sendAccessibilityEvent(
+                                AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
+                        return true;
+                    } else {
+                        onHomeLongClick(mNavigationBarView.getHomeButton().getCurrentView());
                     }
                 }
             } finally {
@@ -970,8 +968,16 @@ public class NavigationBarFragment extends LifecycleFragment implements Callback
         mAutoHideController.setNavigationBar(this);
     }
 
+    // AutoHideElement
+    @Override
     public boolean isSemiTransparent() {
         return mNavigationBarMode == MODE_SEMI_TRANSPARENT;
+    }
+
+    // AutoHideElement
+    @Override
+    public void synchronizeState() {
+        checkNavBarModes();
     }
 
     private void checkBarModes() {

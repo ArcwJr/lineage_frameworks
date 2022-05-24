@@ -271,6 +271,8 @@ import com.android.server.policy.PermissionPolicyInternal;
 import com.android.server.uri.UriGrantsManagerInternal;
 import com.android.server.vr.VrManagerInternal;
 
+import org.lineageos.internal.applications.LineageActivityManager;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileDescriptor;
@@ -650,6 +652,9 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
 
     private int mDeviceOwnerUid = Process.INVALID_UID;
 
+    // Lineage sdk activity related helper
+    private LineageActivityManager mLineageActivityManager;
+
     private final class FontScaleSettingObserver extends ContentObserver {
         private final Uri mFontScaleUri = Settings.System.getUriFor(FONT_SCALE);
         private final Uri mHideErrorDialogsUri = Settings.Global.getUriFor(HIDE_ERROR_DIALOGS);
@@ -719,6 +724,10 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
 
     public void installSystemProviders() {
         mFontScaleSettingObserver = new FontScaleSettingObserver();
+
+        // LineageActivityManager depends on settings so we can initialize only
+        // after providers are available.
+        mLineageActivityManager = new LineageActivityManager(mContext);
     }
 
     public void retrieveSettings(ContentResolver resolver) {
@@ -5653,6 +5662,24 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
         mH.sendMessage(m);
     }
 
+    void startProcessAsync(ActivityRecord activity, boolean knownToBeDead, boolean isTop,
+            String hostingType) {
+        try {
+            if (Trace.isTagEnabled(TRACE_TAG_ACTIVITY_MANAGER)) {
+                Trace.traceBegin(TRACE_TAG_ACTIVITY_MANAGER, "dispatchingStartProcess:"
+                        + activity.processName);
+            }
+            // Post message to start process to avoid possible deadlock of calling into AMS with the
+            // ATMS lock held.
+            final Message m = PooledLambda.obtainMessage(ActivityManagerInternal::startProcess,
+                    mAmInternal, activity.processName, activity.info.applicationInfo, knownToBeDead,
+                    isTop, hostingType, activity.intent.getComponent());
+            mH.sendMessage(m);
+        } finally {
+            Trace.traceEnd(TRACE_TAG_ACTIVITY_MANAGER);
+        }
+    }
+
     void setBooting(boolean booting) {
         mAmInternal.setBooting(booting);
     }
@@ -7483,5 +7510,9 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
                 mCompanionAppUidsMap.put(userId, result);
             }
         }
+    }
+
+    public boolean shouldForceLongScreen(String packageName) {
+        return mLineageActivityManager.shouldForceLongScreen(packageName);
     }
 }

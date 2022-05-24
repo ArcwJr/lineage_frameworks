@@ -16,6 +16,10 @@
 package com.android.systemui.statusbar.phone;
 
 import static android.view.Display.INVALID_DISPLAY;
+import static android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+import static android.view.View.NAVIGATION_BAR_TRANSIENT;
+
+import static org.lineageos.internal.util.DeviceKeysConstants.Action;
 
 import android.content.Context;
 import android.content.pm.ParceledListSlice;
@@ -57,7 +61,9 @@ import com.android.systemui.R;
 import com.android.systemui.bubbles.BubbleController;
 import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.shared.system.QuickStepContract;
-import com.android.systemui.shared.system.WindowManagerWrapper;
+import com.android.systemui.tuner.TunerService;
+
+import lineageos.providers.LineageSettings;
 
 import java.io.PrintWriter;
 import java.util.concurrent.Executor;
@@ -65,42 +71,17 @@ import java.util.concurrent.Executor;
 /**
  * Utility class to handle edge swipes for back gesture
  */
-public class EdgeBackGestureHandler implements DisplayListener {
+public class EdgeBackGestureHandler implements DisplayListener, TunerService.Tunable {
 
     private static final String TAG = "EdgeBackGestureHandler";
     private static final int MAX_LONG_PRESS_TIMEOUT = SystemProperties.getInt(
             "gestures.back_timeout", 250);
 
-    private final IPinnedStackListener.Stub mImeChangedListener = new IPinnedStackListener.Stub() {
-        @Override
-        public void onListenerRegistered(IPinnedStackController controller) {
-        }
+    private static final String KEY_EDGE_LONG_SWIPE_ACTION =
+            "lineagesystem:" + LineageSettings.System.KEY_EDGE_LONG_SWIPE_ACTION;
 
-        @Override
-        public void onImeVisibilityChanged(boolean imeVisible, int imeHeight) {
-            // No need to thread jump, assignments are atomic
-            mImeHeight = imeVisible ? imeHeight : 0;
-            // TODO: Probably cancel any existing gesture
-        }
-
-        @Override
-        public void onShelfVisibilityChanged(boolean shelfVisible, int shelfHeight) {
-        }
-
-        @Override
-        public void onMinimizedStateChanged(boolean isMinimized) {
-        }
-
-        @Override
-        public void onMovementBoundsChanged(Rect insetBounds, Rect normalBounds,
-                Rect animatingBounds, boolean fromImeAdjustment, boolean fromShelfAdjustment,
-                int displayRotation) {
-        }
-
-        @Override
-        public void onActionsChanged(ParceledListSlice actions) {
-        }
-    };
+    private static final String KEY_GESTURE_BACK_EXCLUDE_TOP =
+            "lineagesecure:" + LineageSettings.Secure.GESTURE_BACK_EXCLUDE_TOP;
 
     private ISystemGestureExclusionListener mGestureExclusionListener =
             new ISystemGestureExclusionListener.Stub() {
@@ -130,6 +111,8 @@ public class EdgeBackGestureHandler implements DisplayListener {
 
     // The edge width where touch down is allowed
     private int mEdgeWidth;
+    // The bottom gesture area height
+    private int mBottomGestureHeight;
     // The slop to distinguish between horizontal and vertical motion
     private final float mTouchSlop;
     // Duration after which we consider the event as longpress.
@@ -142,6 +125,8 @@ public class EdgeBackGestureHandler implements DisplayListener {
 
 
     private final int mNavBarHeight;
+    // User-limited area
+    private int mUserExclude;
 
     private final PointF mDownPoint = new PointF();
     private boolean mThresholdCrossed = false;
@@ -149,11 +134,11 @@ public class EdgeBackGestureHandler implements DisplayListener {
     private boolean mInRejectedExclusion = false;
     private boolean mIsOnLeftEdge;
 
-    private int mImeHeight = 0;
-
     private boolean mIsAttached;
     private boolean mIsGesturalModeEnabled;
     private boolean mIsEnabled;
+    private boolean mIsInTransientImmersiveStickyState;
+    private boolean mIsLongSwipeEnabled;
 
     private InputMonitor mInputMonitor;
     private InputEventReceiver mInputEventReceiver;
@@ -166,6 +151,7 @@ public class EdgeBackGestureHandler implements DisplayListener {
     private RegionSamplingHelper mRegionSamplingHelper;
     private int mLeftInset;
     private int mRightInset;
+    private float mLongSwipeWidth;
 
     public EdgeBackGestureHandler(Context context, OverviewProxyService overviewProxyService) {
         final Resources res = context.getResources();
@@ -174,6 +160,10 @@ public class EdgeBackGestureHandler implements DisplayListener {
         mMainExecutor = context.getMainExecutor();
         mWm = context.getSystemService(WindowManager.class);
         mOverviewProxyService = overviewProxyService;
+
+        final TunerService tunerService = Dependency.get(TunerService.class);
+        tunerService.addTunable(this, KEY_EDGE_LONG_SWIPE_ACTION);
+        tunerService.addTunable(this, KEY_GESTURE_BACK_EXCLUDE_TOP);
 
         // Reduce the default touch slop to ensure that we can intercept the gesture
         // before the app starts to react to it.
@@ -191,6 +181,8 @@ public class EdgeBackGestureHandler implements DisplayListener {
     public void updateCurrentUserResources(Resources res) {
         mEdgeWidth = res.getDimensionPixelSize(
                 com.android.internal.R.dimen.config_backGestureInset);
+        mBottomGestureHeight = res.getDimensionPixelSize(
+                com.android.internal.R.dimen.navigation_bar_gesture_height);
     }
 
     /**
@@ -213,6 +205,12 @@ public class EdgeBackGestureHandler implements DisplayListener {
         mIsGesturalModeEnabled = QuickStepContract.isGesturalMode(mode);
         updateIsEnabled();
         updateCurrentUserResources(currentUserContext.getResources());
+    }
+
+    public void onSystemUiVisibilityChanged(int systemUiVisibility) {
+        mIsInTransientImmersiveStickyState =
+                (systemUiVisibility & SYSTEM_UI_FLAG_IMMERSIVE_STICKY) != 0
+                && (systemUiVisibility & NAVIGATION_BAR_TRANSIENT) != 0;
     }
 
     private void disposeInputChannel() {
@@ -242,7 +240,6 @@ public class EdgeBackGestureHandler implements DisplayListener {
         }
 
         if (!mIsEnabled) {
-            WindowManagerWrapper.getInstance().removePinnedStackListener(mImeChangedListener);
             mContext.getSystemService(DisplayManager.class).unregisterDisplayListener(this);
 
             try {
@@ -259,7 +256,6 @@ public class EdgeBackGestureHandler implements DisplayListener {
                     mContext.getMainThreadHandler());
 
             try {
-                WindowManagerWrapper.getInstance().addPinnedStackListener(mImeChangedListener);
                 WindowManagerGlobal.getWindowManagerService()
                         .registerSystemGestureExclusionListener(
                                 mGestureExclusionListener, mDisplayId);
@@ -292,6 +288,7 @@ public class EdgeBackGestureHandler implements DisplayListener {
             mEdgePanelLp.accessibilityTitle = mContext.getString(R.string.nav_bar_edge_panel);
             mEdgePanelLp.windowAnimations = 0;
             mEdgePanel.setLayoutParams(mEdgePanelLp);
+            updateLongSwipeWidth();
             mWm.addView(mEdgePanel, mEdgePanelLp);
             mRegionSamplingHelper = new RegionSamplingHelper(mEdgePanel,
                     new RegionSamplingHelper.SamplingCallback() {
@@ -315,13 +312,26 @@ public class EdgeBackGestureHandler implements DisplayListener {
     }
 
     private boolean isWithinTouchRegion(int x, int y) {
-        if (y > (mDisplaySize.y - Math.max(mImeHeight, mNavBarHeight))) {
+        // Disallow if over user exclusion area
+        if (mUserExclude > 0 && y < mDisplaySize.y - mNavBarHeight - mUserExclude) {
             return false;
         }
 
+        // Disallow if too far from the edge
         if (x > mEdgeWidth + mLeftInset && x < (mDisplaySize.x - mEdgeWidth - mRightInset)) {
             return false;
         }
+
+        // Disallow if we are in the bottom gesture area
+        if (y >= (mDisplaySize.y - mBottomGestureHeight)) {
+            return false;
+        }
+
+        // Always allow if the user is in a transient sticky immersive state
+        if (mIsInTransientImmersiveStickyState) {
+            return true;
+        }
+
         boolean isInExcludedRegion = mExcludeRegion.contains(x, y);
         if (isInExcludedRegion) {
             mOverviewProxyService.notifyBackAction(false /* completed */, -1, -1,
@@ -401,11 +411,19 @@ public class EdgeBackGestureHandler implements DisplayListener {
             boolean isUp = action == MotionEvent.ACTION_UP;
             if (isUp) {
                 boolean performAction = mEdgePanel.shouldTriggerBack();
-                if (performAction) {
+                boolean performLongSwipe = mEdgePanel.shouldTriggerLongSwipe();
+                if (performLongSwipe) {
+                    // Perform long swipe action
+                    sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK,
+                            KeyEvent.FLAG_LONG_PRESS);
+                    sendEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK,
+                            KeyEvent.FLAG_LONG_PRESS);
+                } else if (performAction) {
                     // Perform back
                     sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK);
                     sendEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK);
                 }
+                performAction = performAction || performLongSwipe;
                 mOverviewProxyService.notifyBackAction(performAction, (int) mDownPoint.x,
                         (int) mDownPoint.y, false /* isButton */, !mIsOnLeftEdge);
                 int backtype = performAction ? (mInRejectedExclusion
@@ -443,6 +461,17 @@ public class EdgeBackGestureHandler implements DisplayListener {
         mEdgePanel.adjustRectToBoundingBox(mSamplingRect);
     }
 
+    private void updateLongSwipeWidth() {
+        if (mIsEnabled && mEdgePanel != null) {
+            if (mIsLongSwipeEnabled) {
+                mLongSwipeWidth = MathUtils.min(mDisplaySize.x * 0.5f, mEdgePanelLp.width * 2.5f);
+                mEdgePanel.setLongSwipeThreshold(mLongSwipeWidth);
+            } else {
+                mEdgePanel.setLongSwipeThreshold(0.0f);
+            }
+        }
+    }
+
     @Override
     public void onDisplayAdded(int displayId) { }
 
@@ -457,16 +486,31 @@ public class EdgeBackGestureHandler implements DisplayListener {
     }
 
     private void updateDisplaySize() {
-        mContext.getSystemService(DisplayManager.class)
-                .getDisplay(mDisplayId)
-                .getRealSize(mDisplaySize);
+        mContext.getDisplay().getRealSize(mDisplaySize);
+        updateLongSwipeWidth();
+        loadUserExclusion();
+    }
+
+    @Override
+    public void onTuningChanged(String key, String newValue) {
+        if (KEY_EDGE_LONG_SWIPE_ACTION.equals(key)) {
+            mIsLongSwipeEnabled = newValue != null
+                    && Action.fromIntSafe(Integer.parseInt(newValue)) != Action.NOTHING;
+            updateLongSwipeWidth();
+        } else if (KEY_GESTURE_BACK_EXCLUDE_TOP.equals(key)) {
+            loadUserExclusion();
+        }
     }
 
     private void sendEvent(int action, int code) {
+        sendEvent(action, code, 0);
+    }
+
+    private void sendEvent(int action, int code, int flags) {
         long when = SystemClock.uptimeMillis();
         final KeyEvent ev = new KeyEvent(when, when, action, code, 0 /* repeat */,
                 0 /* metaState */, KeyCharacterMap.VIRTUAL_KEYBOARD, 0 /* scancode */,
-                KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_VIRTUAL_HARD_KEY,
+                flags | KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_VIRTUAL_HARD_KEY,
                 InputDevice.SOURCE_KEYBOARD);
 
         // Bubble controller will give us a valid display id if it should get the back event
@@ -476,6 +520,19 @@ public class EdgeBackGestureHandler implements DisplayListener {
             ev.setDisplayId(bubbleDisplayId);
         }
         InputManager.getInstance().injectInputEvent(ev, InputManager.INJECT_INPUT_EVENT_MODE_ASYNC);
+    }
+
+    private void loadUserExclusion() {
+        if (mDisplaySize == null) return;
+
+        final int excludedPercentage = LineageSettings.Secure.getInt(mContext.getContentResolver(),
+                LineageSettings.Secure.GESTURE_BACK_EXCLUDE_TOP, 0);
+        if (excludedPercentage != 0) {
+            // Exclude a part of the top of the vertical display size
+            mUserExclude = mDisplaySize.y - mDisplaySize.y * excludedPercentage / 100;
+        } else {
+            mUserExclude = 0;
+        }
     }
 
     public void setInsets(int leftInset, int rightInset) {
@@ -490,7 +547,6 @@ public class EdgeBackGestureHandler implements DisplayListener {
         pw.println("  mInRejectedExclusion" + mInRejectedExclusion);
         pw.println("  mExcludeRegion=" + mExcludeRegion);
         pw.println("  mUnrestrictedExcludeRegion=" + mUnrestrictedExcludeRegion);
-        pw.println("  mImeHeight=" + mImeHeight);
         pw.println("  mIsAttached=" + mIsAttached);
         pw.println("  mEdgeWidth=" + mEdgeWidth);
     }

@@ -66,6 +66,10 @@ import static android.os.Process.SHELL_UID;
 import static android.os.Process.SIGNAL_USR1;
 import static android.os.Process.SYSTEM_UID;
 import static android.os.Process.THREAD_PRIORITY_FOREGROUND;
+import static android.os.Process.ZYGOTE_POLICY_FLAG_BATCH_LAUNCH;
+import static android.os.Process.ZYGOTE_POLICY_FLAG_EMPTY;
+import static android.os.Process.ZYGOTE_POLICY_FLAG_LATENCY_SENSITIVE;
+import static android.os.Process.ZYGOTE_POLICY_FLAG_SYSTEM_PROCESS;
 import static android.os.Process.ZYGOTE_PROCESS;
 import static android.os.Process.getTotalMemory;
 import static android.os.Process.isThreadInProcess;
@@ -271,8 +275,8 @@ import android.os.WorkSource;
 import android.os.storage.IStorageManager;
 import android.os.storage.StorageManager;
 import android.provider.DeviceConfig;
-import android.provider.Settings;
 import android.provider.DeviceConfig.Properties;
+import android.provider.Settings;
 import android.server.ServerProtoEnums;
 import android.sysprop.VoldProperties;
 import android.text.TextUtils;
@@ -352,7 +356,6 @@ import com.android.server.contentcapture.ContentCaptureManagerInternal;
 import com.android.server.firewall.IntentFirewall;
 import com.android.server.job.JobSchedulerInternal;
 import com.android.server.pm.Installer;
-import com.android.server.pm.Installer.InstallerException;
 import com.android.server.uri.GrantUri;
 import com.android.server.uri.UriGrantsManagerInternal;
 import com.android.server.utils.PriorityDump;
@@ -363,8 +366,6 @@ import com.android.server.wm.ActivityTaskManagerInternal;
 import com.android.server.wm.ActivityTaskManagerService;
 import com.android.server.wm.WindowManagerService;
 import com.android.server.wm.WindowProcessController;
-
-import dalvik.system.VMRuntime;
 
 import libcore.util.EmptyArray;
 
@@ -3010,7 +3011,7 @@ public class ActivityManagerService extends IActivityManager.Stub
             info.targetSdkVersion = Build.VERSION.SDK_INT;
             ProcessRecord proc = mProcessList.startProcessLocked(processName, info /* info */,
                     false /* knownToBeDead */, 0 /* intentFlags */,
-                    sNullHostingRecord  /* hostingRecord */,
+                    sNullHostingRecord  /* hostingRecord */, ZYGOTE_POLICY_FLAG_EMPTY,
                     true /* allowWhileBooting */, true /* isolated */,
                     uid, true /* keepIfLarge */, abiOverride, entryPoint, entryPointArgs,
                     crashHandler);
@@ -3021,12 +3022,12 @@ public class ActivityManagerService extends IActivityManager.Stub
     @GuardedBy("this")
     final ProcessRecord startProcessLocked(String processName,
             ApplicationInfo info, boolean knownToBeDead, int intentFlags,
-            HostingRecord hostingRecord, boolean allowWhileBooting,
+            HostingRecord hostingRecord, int zygotePolicyFlags, boolean allowWhileBooting,
             boolean isolated, boolean keepIfLarge) {
         return mProcessList.startProcessLocked(processName, info, knownToBeDead, intentFlags,
-                hostingRecord, allowWhileBooting, isolated, 0 /* isolatedUid */, keepIfLarge,
-                null /* ABI override */, null /* entryPoint */, null /* entryPointArgs */,
-                null /* crashHandler */);
+                hostingRecord, zygotePolicyFlags, allowWhileBooting, isolated, 0 /* isolatedUid */,
+                keepIfLarge, null /* ABI override */, null /* entryPoint */,
+                null /* entryPointArgs */, null /* crashHandler */);
     }
 
     boolean isAllowedWhileBooting(ApplicationInfo ai) {
@@ -3174,6 +3175,10 @@ public class ActivityManagerService extends IActivityManager.Stub
     @Override
     public boolean setProcessMemoryTrimLevel(String process, int userId, int level)
             throws RemoteException {
+        if (!isCallerShell()) {
+            EventLog.writeEvent(0x534e4554, 160390416, Binder.getCallingUid(), "");
+            throw new SecurityException("Only shell can call it");
+        }
         synchronized (this) {
             final ProcessRecord app = findProcessLocked(process, userId, "setProcessMemoryTrimLevel");
             if (app == null) {
@@ -3568,7 +3573,7 @@ public class ActivityManagerService extends IActivityManager.Stub
 
     @Override
     public void crashApplication(int uid, int initialPid, String packageName, int userId,
-            String message) {
+            String message, boolean force) {
         if (checkCallingPermission(android.Manifest.permission.FORCE_STOP_PACKAGES)
                 != PackageManager.PERMISSION_GRANTED) {
             String msg = "Permission Denial: crashApplication() from pid="
@@ -3580,7 +3585,8 @@ public class ActivityManagerService extends IActivityManager.Stub
         }
 
         synchronized(this) {
-            mAppErrors.scheduleAppCrashLocked(uid, initialPid, packageName, userId, message);
+            mAppErrors.scheduleAppCrashLocked(uid, initialPid, packageName, userId,
+                    message, force);
         }
     }
 
@@ -4759,7 +4765,7 @@ public class ActivityManagerService extends IActivityManager.Stub
     }
 
     @GuardedBy("this")
-    private final boolean attachApplicationLocked(IApplicationThread thread,
+    private boolean attachApplicationLocked(@NonNull IApplicationThread thread,
             int pid, int callingUid, long startSeq) {
 
         // Find the application record that is being attached...  either via
@@ -4845,14 +4851,15 @@ public class ActivityManagerService extends IActivityManager.Stub
         } catch (RemoteException e) {
             app.resetPackageList(mProcessStats);
             mProcessList.startProcessLocked(app,
-                    new HostingRecord("link fail", processName));
+                    new HostingRecord("link fail", processName),
+                    ZYGOTE_POLICY_FLAG_EMPTY);
             return false;
         }
 
         EventLog.writeEvent(EventLogTags.AM_PROC_BOUND, app.userId, app.pid, app.processName);
 
         app.curAdj = app.setAdj = app.verifiedAdj = ProcessList.INVALID_ADJ;
-        app.setCurrentSchedulingGroup(app.setSchedGroup = ProcessList.SCHED_GROUP_DEFAULT);
+        mOomAdjuster.setAttachingSchedGroupLocked(app);
         app.forcingToImportant = null;
         updateProcessForegroundLocked(app, false, 0, false);
         app.hasShownUi = false;
@@ -5084,7 +5091,8 @@ public class ActivityManagerService extends IActivityManager.Stub
 
             app.resetPackageList(mProcessStats);
             app.unlinkDeathRecipient();
-            mProcessList.startProcessLocked(app, new HostingRecord("bind-fail", processName));
+            mProcessList.startProcessLocked(app, new HostingRecord("bind-fail", processName),
+                    ZYGOTE_POLICY_FLAG_EMPTY);
             return false;
         }
 
@@ -5173,6 +5181,9 @@ public class ActivityManagerService extends IActivityManager.Stub
 
     @Override
     public final void attachApplication(IApplicationThread thread, long startSeq) {
+        if (thread == null) {
+            throw new SecurityException("Invalid application interface");
+        }
         synchronized (this) {
             int callingPid = Binder.getCallingPid();
             final int callingUid = Binder.getCallingUid();
@@ -5199,26 +5210,6 @@ public class ActivityManagerService extends IActivityManager.Stub
                 return;
             }
             mCallFinishBooting = false;
-        }
-
-        ArraySet<String> completedIsas = new ArraySet<String>();
-        for (String abi : Build.SUPPORTED_ABIS) {
-            ZYGOTE_PROCESS.establishZygoteConnectionForAbi(abi);
-            final String instructionSet = VMRuntime.getInstructionSet(abi);
-            if (!completedIsas.contains(instructionSet)) {
-                try {
-                    mInstaller.markBootComplete(VMRuntime.getInstructionSet(abi));
-                } catch (InstallerException e) {
-                    if (!VMRuntime.didPruneDalvikCache()) {
-                        // This is technically not the right filter, as different zygotes may
-                        // have made different pruning decisions. But the log is best effort,
-                        // anyways.
-                        Slog.w(TAG, "Unable to mark boot complete for abi: " + abi + " (" +
-                                e.getMessage() +")");
-                    }
-                }
-                completedIsas.add(instructionSet);
-            }
         }
 
         IntentFilter pkgFilter = new IntentFilter();
@@ -5279,7 +5270,9 @@ public class ActivityManagerService extends IActivityManager.Stub
                 for (int ip=0; ip<NP; ip++) {
                     if (DEBUG_PROCESSES) Slog.v(TAG_PROCESSES, "Starting process on hold: "
                             + procs.get(ip));
-                    mProcessList.startProcessLocked(procs.get(ip), new HostingRecord("on-hold"));
+                    mProcessList.startProcessLocked(procs.get(ip),
+                            new HostingRecord("on-hold"),
+                            ZYGOTE_POLICY_FLAG_BATCH_LAUNCH);
                 }
             }
             if (mFactoryTest == FactoryTest.FACTORY_TEST_LOW_LEVEL) {
@@ -6826,67 +6819,68 @@ public class ActivityManagerService extends IActivityManager.Stub
                         "getContentProviderImpl: after checkContentProviderPermission");
 
                 final long origId = Binder.clearCallingIdentity();
+                try {
+                    checkTime(startTime, "getContentProviderImpl: incProviderCountLocked");
 
-                checkTime(startTime, "getContentProviderImpl: incProviderCountLocked");
-
-                // In this case the provider instance already exists, so we can
-                // return it right away.
-                conn = incProviderCountLocked(r, cpr, token, callingUid, callingPackage, callingTag,
-                        stable);
-                if (conn != null && (conn.stableCount+conn.unstableCount) == 1) {
-                    if (cpr.proc != null && r.setAdj <= ProcessList.PERCEPTIBLE_LOW_APP_ADJ) {
-                        // If this is a perceptible app accessing the provider,
-                        // make sure to count it as being accessed and thus
-                        // back up on the LRU list.  This is good because
-                        // content providers are often expensive to start.
-                        checkTime(startTime, "getContentProviderImpl: before updateLruProcess");
-                        mProcessList.updateLruProcessLocked(cpr.proc, false, null);
-                        checkTime(startTime, "getContentProviderImpl: after updateLruProcess");
+                    // Return the provider instance right away since it already exists.
+                    conn = incProviderCountLocked(r, cpr, token, callingUid, callingPackage,
+                            callingTag, stable);
+                    if (conn != null && (conn.stableCount+conn.unstableCount) == 1) {
+                        if (cpr.proc != null && r.setAdj <= ProcessList.PERCEPTIBLE_LOW_APP_ADJ) {
+                            // If this is a perceptible app accessing the provider,
+                            // make sure to count it as being accessed and thus
+                            // back up on the LRU list.  This is good because
+                            // content providers are often expensive to start.
+                            checkTime(startTime, "getContentProviderImpl: before updateLruProcess");
+                            mProcessList.updateLruProcessLocked(cpr.proc, false, null);
+                            checkTime(startTime, "getContentProviderImpl: after updateLruProcess");
+                        }
                     }
-                }
 
-                checkTime(startTime, "getContentProviderImpl: before updateOomAdj");
-                final int verifiedAdj = cpr.proc.verifiedAdj;
-                boolean success = updateOomAdjLocked(cpr.proc, true,
-                        OomAdjuster.OOM_ADJ_REASON_GET_PROVIDER);
-                // XXX things have changed so updateOomAdjLocked doesn't actually tell us
-                // if the process has been successfully adjusted.  So to reduce races with
-                // it, we will check whether the process still exists.  Note that this doesn't
-                // completely get rid of races with LMK killing the process, but should make
-                // them much smaller.
-                if (success && verifiedAdj != cpr.proc.setAdj && !isProcessAliveLocked(cpr.proc)) {
-                    success = false;
-                }
-                maybeUpdateProviderUsageStatsLocked(r, cpr.info.packageName, name);
-                checkTime(startTime, "getContentProviderImpl: after updateOomAdj");
-                if (DEBUG_PROVIDER) Slog.i(TAG_PROVIDER, "Adjust success: " + success);
-                // NOTE: there is still a race here where a signal could be
-                // pending on the process even though we managed to update its
-                // adj level.  Not sure what to do about this, but at least
-                // the race is now smaller.
-                if (!success) {
-                    // Uh oh...  it looks like the provider's process
-                    // has been killed on us.  We need to wait for a new
-                    // process to be started, and make sure its death
-                    // doesn't kill our process.
-                    Slog.i(TAG, "Existing provider " + cpr.name.flattenToShortString()
-                            + " is crashing; detaching " + r);
-                    boolean lastRef = decProviderCountLocked(conn, cpr, token, stable);
-                    checkTime(startTime, "getContentProviderImpl: before appDied");
-                    appDiedLocked(cpr.proc);
-                    checkTime(startTime, "getContentProviderImpl: after appDied");
-                    if (!lastRef) {
-                        // This wasn't the last ref our process had on
-                        // the provider...  we have now been killed, bail.
-                        return null;
+                    checkTime(startTime, "getContentProviderImpl: before updateOomAdj");
+                    final int verifiedAdj = cpr.proc.verifiedAdj;
+                    boolean success = updateOomAdjLocked(cpr.proc, true,
+                            OomAdjuster.OOM_ADJ_REASON_GET_PROVIDER);
+                    // XXX things have changed so updateOomAdjLocked doesn't actually tell us
+                    // if the process has been successfully adjusted.  So to reduce races with
+                    // it, we will check whether the process still exists.  Note that this doesn't
+                    // completely get rid of races with LMK killing the process, but should make
+                    // them much smaller.
+                    if (success && verifiedAdj != cpr.proc.setAdj
+                            && !isProcessAliveLocked(cpr.proc)) {
+                        success = false;
                     }
-                    providerRunning = false;
-                    conn = null;
-                } else {
-                    cpr.proc.verifiedAdj = cpr.proc.setAdj;
+                    maybeUpdateProviderUsageStatsLocked(r, cpr.info.packageName, name);
+                    checkTime(startTime, "getContentProviderImpl: after updateOomAdj");
+                    if (DEBUG_PROVIDER) Slog.i(TAG_PROVIDER, "Adjust success: " + success);
+                    // NOTE: there is still a race here where a signal could be
+                    // pending on the process even though we managed to update its
+                    // adj level.  Not sure what to do about this, but at least
+                    // the race is now smaller.
+                    if (!success) {
+                        // Uh oh...  it looks like the provider's process
+                        // has been killed on us.  We need to wait for a new
+                        // process to be started, and make sure its death
+                        // doesn't kill our process.
+                        Slog.i(TAG, "Existing provider " + cpr.name.flattenToShortString()
+                                + " is crashing; detaching " + r);
+                        boolean lastRef = decProviderCountLocked(conn, cpr, token, stable);
+                        checkTime(startTime, "getContentProviderImpl: before appDied");
+                        appDiedLocked(cpr.proc);
+                        checkTime(startTime, "getContentProviderImpl: after appDied");
+                        if (!lastRef) {
+                            // This wasn't the last ref our process had on
+                            // the provider...  we have now been killed, bail.
+                            return null;
+                        }
+                        providerRunning = false;
+                        conn = null;
+                    } else {
+                        cpr.proc.verifiedAdj = cpr.proc.setAdj;
+                    }
+                } finally {
+                    Binder.restoreCallingIdentity(origId);
                 }
-
-                Binder.restoreCallingIdentity(origId);
             }
 
             if (!providerRunning) {
@@ -7053,8 +7047,9 @@ public class ActivityManagerService extends IActivityManager.Stub
                             proc = startProcessLocked(cpi.processName,
                                     cpr.appInfo, false, 0,
                                     new HostingRecord("content provider",
-                                    new ComponentName(cpi.applicationInfo.packageName,
-                                            cpi.name)), false, false, false);
+                                        new ComponentName(cpi.applicationInfo.packageName,
+                                                cpi.name)),
+                                    ZYGOTE_POLICY_FLAG_EMPTY, false, false, false);
                             checkTime(startTime, "getContentProviderImpl: after start process");
                             if (proc == null) {
                                 Slog.w(TAG, "Unable to launch app "
@@ -7581,7 +7576,8 @@ public class ActivityManagerService extends IActivityManager.Stub
                         .getPersistentApplications(STOCK_PM_FLAGS | matchFlags).getList();
                 for (ApplicationInfo app : apps) {
                     if (!"android".equals(app.packageName)) {
-                        addAppLocked(app, null, false, null /* ABI override */);
+                        addAppLocked(app, null, false, null /* ABI override */,
+                                ZYGOTE_POLICY_FLAG_BATCH_LAUNCH);
                     }
                 }
             } catch (RemoteException ex) {
@@ -7764,15 +7760,16 @@ public class ActivityManagerService extends IActivityManager.Stub
 
     @GuardedBy("this")
     final ProcessRecord addAppLocked(ApplicationInfo info, String customProcess, boolean isolated,
-            String abiOverride) {
+            String abiOverride, int zygotePolicyFlags) {
         return addAppLocked(info, customProcess, isolated, false /* disableHiddenApiChecks */,
-                false /* mountExtStorageFull */, abiOverride);
+                false /* mountExtStorageFull */, abiOverride, zygotePolicyFlags);
     }
 
     // TODO: Move to ProcessList?
     @GuardedBy("this")
     final ProcessRecord addAppLocked(ApplicationInfo info, String customProcess, boolean isolated,
-            boolean disableHiddenApiChecks, boolean mountExtStorageFull, String abiOverride) {
+            boolean disableHiddenApiChecks, boolean mountExtStorageFull, String abiOverride,
+            int zygotePolicyFlags) {
         ProcessRecord app;
         if (!isolated) {
             app = getProcessRecordLocked(customProcess != null ? customProcess : info.processName,
@@ -7807,7 +7804,8 @@ public class ActivityManagerService extends IActivityManager.Stub
             mPersistentStartingProcesses.add(app);
             mProcessList.startProcessLocked(app, new HostingRecord("added application",
                     customProcess != null ? customProcess : app.processName),
-                    disableHiddenApiChecks, mountExtStorageFull, abiOverride);
+                    zygotePolicyFlags, disableHiddenApiChecks,
+                    mountExtStorageFull, abiOverride);
         }
 
         return app;
@@ -8257,6 +8255,21 @@ public class ActivityManagerService extends IActivityManager.Stub
         synchronized (this) {
             mProcessObservers.unregister(observer);
         }
+    }
+
+    private boolean isActiveInstrumentation(int uid) {
+        synchronized (ActivityManagerService.this) {
+            for (int i = mActiveInstrumentation.size() - 1; i >= 0; i--) {
+                final ActiveInstrumentation instrumentation = mActiveInstrumentation.get(i);
+                for (int j = instrumentation.mRunningProcesses.size() - 1; j >= 0; j--) {
+                    final ProcessRecord process = instrumentation.mRunningProcesses.get(j);
+                    if (process.uid == uid) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     @Override
@@ -13815,7 +13828,8 @@ public class ActivityManagerService extends IActivityManager.Stub
             mProcessList.addProcessNameLocked(app);
             app.pendingStart = false;
             mProcessList.startProcessLocked(app,
-                    new HostingRecord("restart", app.processName));
+                    new HostingRecord("restart", app.processName),
+                    ZYGOTE_POLICY_FLAG_EMPTY);
             return true;
         } else if (app.pid > 0 && app.pid != MY_PID) {
             // Goodbye!
@@ -14173,7 +14187,7 @@ public class ActivityManagerService extends IActivityManager.Stub
             ProcessRecord proc = startProcessLocked(app.processName, app,
                     false, 0,
                     new HostingRecord("backup", hostingName),
-                    false, false, false);
+                    ZYGOTE_POLICY_FLAG_SYSTEM_PROCESS, false, false, false);
             if (proc == null) {
                 Slog.e(TAG, "Unable to start backup agent process " + r);
                 return false;
@@ -15786,7 +15800,8 @@ public class ActivityManagerService extends IActivityManager.Stub
             }
 
             ProcessRecord app = addAppLocked(ai, defProcess, false, disableHiddenApiChecks,
-                    mountExtStorageFull, abiOverride);
+                    mountExtStorageFull, abiOverride,
+                    ZYGOTE_POLICY_FLAG_EMPTY);
             app.setActiveInstrumentation(activeInstr);
             activeInstr.mFinished = false;
             activeInstr.mRunningProcesses.add(app);
@@ -17262,7 +17277,8 @@ public class ActivityManagerService extends IActivityManager.Stub
                 mProcessList.mRemovedProcesses.remove(i);
 
                 if (app.isPersistent()) {
-                    addAppLocked(app.info, null, false, null /* ABI override */);
+                    addAppLocked(app.info, null, false, null /* ABI override */,
+                            ZYGOTE_POLICY_FLAG_BATCH_LAUNCH);
                 }
             }
         }
@@ -18393,18 +18409,21 @@ public class ActivityManagerService extends IActivityManager.Stub
         }
 
         @Override
-        public void startProcess(String processName, ApplicationInfo info,
-                boolean knownToBeDead, String hostingType, ComponentName hostingName) {
+        public void startProcess(String processName, ApplicationInfo info, boolean knownToBeDead,
+                boolean isTop, String hostingType, ComponentName hostingName) {
             try {
                 if (Trace.isTagEnabled(Trace.TRACE_TAG_ACTIVITY_MANAGER)) {
                     Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "startProcess:"
                             + processName);
                 }
                 synchronized (ActivityManagerService.this) {
+                    // If the process is known as top app, set a hint so when the process is
+                    // started, the top priority can be applied immediately to avoid cpu being
+                    // preempted by other processes before attaching the process of top app.
                     startProcessLocked(processName, info, knownToBeDead, 0 /* intentFlags */,
-                            new HostingRecord(hostingType, hostingName),
-                            false /* allowWhileBooting */, false /* isolated */,
-                            true /* keepIfLarge */);
+                            new HostingRecord(hostingType, hostingName, isTop),
+                            ZYGOTE_POLICY_FLAG_LATENCY_SENSITIVE, false /* allowWhileBooting */,
+                            false /* isolated */, true /* keepIfLarge */);
                 }
             } finally {
                 Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
@@ -18495,6 +18514,22 @@ public class ActivityManagerService extends IActivityManager.Stub
         }
 
         @Override
+        public boolean hasForegroundServiceNotification(String pkg, int userId,
+                String channelId) {
+            synchronized (ActivityManagerService.this) {
+                return mServices.hasForegroundServiceNotificationLocked(pkg, userId, channelId);
+            }
+        }
+
+        @Override
+        public void stopForegroundServicesForChannel(String pkg, int userId,
+                String channelId) {
+            synchronized (ActivityManagerService.this) {
+                mServices.stopForegroundServicesForChannelLocked(pkg, userId, channelId);
+            }
+        }
+
+        @Override
         public void registerProcessObserver(IProcessObserver processObserver) {
             ActivityManagerService.this.registerProcessObserver(processObserver);
         }
@@ -18502,6 +18537,11 @@ public class ActivityManagerService extends IActivityManager.Stub
         @Override
         public void unregisterProcessObserver(IProcessObserver processObserver) {
             ActivityManagerService.this.unregisterProcessObserver(processObserver);
+        }
+
+        @Override
+        public boolean isActiveInstrumentation(int uid) {
+            return ActivityManagerService.this.isActiveInstrumentation(uid);
         }
     }
 

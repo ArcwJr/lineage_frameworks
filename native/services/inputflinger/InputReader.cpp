@@ -124,9 +124,9 @@ static inline const char* toString(bool value) {
 }
 
 static int32_t rotateValueUsingRotationMap(int32_t value, int32_t orientation,
-        const int32_t map[][4], size_t mapSize) {
+        const int32_t map[][4], size_t mapSize, int32_t rotationMapOffset) {
     if (orientation != DISPLAY_ORIENTATION_0) {
-        for (size_t i = 0; i < mapSize; i++) {
+        for (size_t i = rotationMapOffset; i < mapSize; i++) {
             if (value == map[i][0]) {
                 return map[i][orientation];
             }
@@ -138,6 +138,16 @@ static int32_t rotateValueUsingRotationMap(int32_t value, int32_t orientation,
 static const int32_t keyCodeRotationMap[][4] = {
         // key codes enumerated counter-clockwise with the original (unrotated) key first
         // no rotation,        90 degree rotation,  180 degree rotation, 270 degree rotation
+
+        // volume keys - tablet
+        { AKEYCODE_VOLUME_UP,   AKEYCODE_VOLUME_UP,   AKEYCODE_VOLUME_DOWN, AKEYCODE_VOLUME_DOWN },
+        { AKEYCODE_VOLUME_DOWN, AKEYCODE_VOLUME_DOWN, AKEYCODE_VOLUME_UP,   AKEYCODE_VOLUME_UP },
+
+        // volume keys - phone or hybrid
+        { AKEYCODE_VOLUME_UP,   AKEYCODE_VOLUME_DOWN, AKEYCODE_VOLUME_DOWN, AKEYCODE_VOLUME_UP },
+        { AKEYCODE_VOLUME_DOWN, AKEYCODE_VOLUME_UP,   AKEYCODE_VOLUME_UP,   AKEYCODE_VOLUME_DOWN },
+
+        // dpad keys - common
         { AKEYCODE_DPAD_DOWN,   AKEYCODE_DPAD_RIGHT,  AKEYCODE_DPAD_UP,     AKEYCODE_DPAD_LEFT },
         { AKEYCODE_DPAD_RIGHT,  AKEYCODE_DPAD_UP,     AKEYCODE_DPAD_LEFT,   AKEYCODE_DPAD_DOWN },
         { AKEYCODE_DPAD_UP,     AKEYCODE_DPAD_LEFT,   AKEYCODE_DPAD_DOWN,   AKEYCODE_DPAD_RIGHT },
@@ -178,11 +188,11 @@ static int32_t stemKeyRotationMap[][2] = {
 static const size_t stemKeyRotationMapSize =
         sizeof(stemKeyRotationMap) / sizeof(stemKeyRotationMap[0]);
 
-static int32_t rotateKeyCode(int32_t keyCode, int32_t orientation) {
+static int32_t rotateKeyCode(int32_t keyCode, int32_t orientation, int32_t rotationMapOffset) {
     keyCode = rotateStemKey(keyCode, orientation,
             stemKeyRotationMap, stemKeyRotationMapSize);
     return rotateValueUsingRotationMap(keyCode, orientation,
-            keyCodeRotationMap, keyCodeRotationMapSize);
+            keyCodeRotationMap, keyCodeRotationMapSize, rotationMapOffset);
 }
 
 static void rotateDelta(int32_t orientation, float* deltaX, float* deltaY) {
@@ -2242,6 +2252,13 @@ void KeyboardInputMapper::configure(nsecs_t when,
             mViewport = config->getDisplayViewportByType(ViewportType::VIEWPORT_INTERNAL);
         }
     }
+
+    if (!changes || (changes & InputReaderConfiguration::CHANGE_VOLUME_KEYS_ROTATION)) {
+        // mode 0 (disabled) ~ offset 4
+        // mode 1 (phone) ~ offset 2
+        // mode 2 (tablet) ~ offset 0
+        mRotationMapOffset = 4 - 2 * config->volumeKeysRotationMode;
+    }
 }
 
 static void mapStemKey(int32_t keyCode, const PropertyMap& config, char const *property) {
@@ -2257,7 +2274,7 @@ static void mapStemKey(int32_t keyCode, const PropertyMap& config, char const *p
 }
 
 void KeyboardInputMapper::configureParameters() {
-    mParameters.orientationAware = false;
+    mParameters.orientationAware = !getDevice()->isExternal();
     const PropertyMap& config = getDevice()->getConfiguration();
     config.tryGetProperty(String8("keyboard.orientationAware"),
             mParameters.orientationAware);
@@ -2371,7 +2388,7 @@ void KeyboardInputMapper::processKey(nsecs_t when, bool down, int32_t scanCode,
     if (down) {
         // Rotate key codes according to orientation if needed.
         if (mParameters.orientationAware) {
-            keyCode = rotateKeyCode(keyCode, getOrientation());
+            keyCode = rotateKeyCode(keyCode, getOrientation(), mRotationMapOffset);
         }
 
         // Add key down.
@@ -4332,28 +4349,28 @@ void TouchInputMapper::process(const RawEvent* rawEvent) {
 }
 
 void TouchInputMapper::sync(nsecs_t when) {
-    const RawState* last = mRawStatesPending.empty() ?
-            &mCurrentRawState : &mRawStatesPending.back();
-
     // Push a new state.
     mRawStatesPending.emplace_back();
 
-    RawState* next = &mRawStatesPending.back();
-    next->clear();
-    next->when = when;
+    RawState& next = mRawStatesPending.back();
+    next.clear();
+    next.when = when;
 
     // Sync button state.
-    next->buttonState = mTouchButtonAccumulator.getButtonState()
+    next.buttonState = mTouchButtonAccumulator.getButtonState()
             | mCursorButtonAccumulator.getButtonState();
 
     // Sync scroll
-    next->rawVScroll = mCursorScrollAccumulator.getRelativeVWheel();
-    next->rawHScroll = mCursorScrollAccumulator.getRelativeHWheel();
+    next.rawVScroll = mCursorScrollAccumulator.getRelativeVWheel();
+    next.rawHScroll = mCursorScrollAccumulator.getRelativeHWheel();
     mCursorScrollAccumulator.finishSync();
 
     // Sync touch
-    syncTouch(when, next);
+    syncTouch(when, &next);
 
+    // The last RawState is actually the second to last, since we just added a new state
+    const RawState& last =
+            mRawStatesPending.size() == 1 ? mCurrentRawState : mRawStatesPending.rbegin()[1];
     // Assign pointer ids.
     if (!mHavePointerIds) {
         assignPointerIds(last, next);
@@ -4362,12 +4379,12 @@ void TouchInputMapper::sync(nsecs_t when) {
 #if DEBUG_RAW_EVENTS
     ALOGD("syncTouch: pointerCount %d -> %d, touching ids 0x%08x -> 0x%08x, "
             "hovering ids 0x%08x -> 0x%08x",
-            last->rawPointerData.pointerCount,
-            next->rawPointerData.pointerCount,
-            last->rawPointerData.touchingIdBits.value,
-            next->rawPointerData.touchingIdBits.value,
-            last->rawPointerData.hoveringIdBits.value,
-            next->rawPointerData.hoveringIdBits.value);
+            last.rawPointerData.pointerCount,
+            next.rawPointerData.pointerCount,
+            last.rawPointerData.touchingIdBits.value,
+            next.rawPointerData.touchingIdBits.value,
+            last.rawPointerData.hoveringIdBits.value,
+            next.rawPointerData.hoveringIdBits.value);
 #endif
 
     processRawTouches(false /*timeout*/);
@@ -6584,12 +6601,8 @@ void TouchInputMapper::cancelTouch(nsecs_t when) {
 }
 
 bool TouchInputMapper::isPointInsideSurface(int32_t x, int32_t y) {
-    const float scaledX = x * mXScale;
-    const float scaledY = y * mYScale;
     return x >= mRawPointerAxes.x.minValue && x <= mRawPointerAxes.x.maxValue
-            && scaledX >= mPhysicalLeft && scaledX <= mPhysicalLeft + mPhysicalWidth
-            && y >= mRawPointerAxes.y.minValue && y <= mRawPointerAxes.y.maxValue
-            && scaledY >= mPhysicalTop && scaledY <= mPhysicalTop + mPhysicalHeight;
+            && y >= mRawPointerAxes.y.minValue && y <= mRawPointerAxes.y.maxValue;
 }
 
 const TouchInputMapper::VirtualKey* TouchInputMapper::findVirtualKeyHit(int32_t x, int32_t y) {
@@ -6612,11 +6625,11 @@ const TouchInputMapper::VirtualKey* TouchInputMapper::findVirtualKeyHit(int32_t 
     return nullptr;
 }
 
-void TouchInputMapper::assignPointerIds(const RawState* last, RawState* current) {
-    uint32_t currentPointerCount = current->rawPointerData.pointerCount;
-    uint32_t lastPointerCount = last->rawPointerData.pointerCount;
+void TouchInputMapper::assignPointerIds(const RawState& last, RawState& current) {
+    uint32_t currentPointerCount = current.rawPointerData.pointerCount;
+    uint32_t lastPointerCount = last.rawPointerData.pointerCount;
 
-    current->rawPointerData.clearIdBits();
+    current.rawPointerData.clearIdBits();
 
     if (currentPointerCount == 0) {
         // No pointers to assign.
@@ -6627,21 +6640,21 @@ void TouchInputMapper::assignPointerIds(const RawState* last, RawState* current)
         // All pointers are new.
         for (uint32_t i = 0; i < currentPointerCount; i++) {
             uint32_t id = i;
-            current->rawPointerData.pointers[i].id = id;
-            current->rawPointerData.idToIndex[id] = i;
-            current->rawPointerData.markIdBit(id, current->rawPointerData.isHovering(i));
+            current.rawPointerData.pointers[i].id = id;
+            current.rawPointerData.idToIndex[id] = i;
+            current.rawPointerData.markIdBit(id, current.rawPointerData.isHovering(i));
         }
         return;
     }
 
     if (currentPointerCount == 1 && lastPointerCount == 1
-            && current->rawPointerData.pointers[0].toolType
-                    == last->rawPointerData.pointers[0].toolType) {
+            && current.rawPointerData.pointers[0].toolType
+                    == last.rawPointerData.pointers[0].toolType) {
         // Only one pointer and no change in count so it must have the same id as before.
-        uint32_t id = last->rawPointerData.pointers[0].id;
-        current->rawPointerData.pointers[0].id = id;
-        current->rawPointerData.idToIndex[id] = 0;
-        current->rawPointerData.markIdBit(id, current->rawPointerData.isHovering(0));
+        uint32_t id = last.rawPointerData.pointers[0].id;
+        current.rawPointerData.pointers[0].id = id;
+        current.rawPointerData.idToIndex[id] = 0;
+        current.rawPointerData.markIdBit(id, current.rawPointerData.isHovering(0));
         return;
     }
 
@@ -6659,9 +6672,9 @@ void TouchInputMapper::assignPointerIds(const RawState* last, RawState* current)
         for (uint32_t lastPointerIndex = 0; lastPointerIndex < lastPointerCount;
                 lastPointerIndex++) {
             const RawPointerData::Pointer& currentPointer =
-                    current->rawPointerData.pointers[currentPointerIndex];
+                    current.rawPointerData.pointers[currentPointerIndex];
             const RawPointerData::Pointer& lastPointer =
-                    last->rawPointerData.pointers[lastPointerIndex];
+                    last.rawPointerData.pointers[lastPointerIndex];
             if (currentPointer.toolType == lastPointer.toolType) {
                 int64_t deltaX = currentPointer.x - lastPointer.x;
                 int64_t deltaY = currentPointer.y - lastPointer.y;
@@ -6767,11 +6780,11 @@ void TouchInputMapper::assignPointerIds(const RawState* last, RawState* current)
             matchedCurrentBits.markBit(currentPointerIndex);
             matchedLastBits.markBit(lastPointerIndex);
 
-            uint32_t id = last->rawPointerData.pointers[lastPointerIndex].id;
-            current->rawPointerData.pointers[currentPointerIndex].id = id;
-            current->rawPointerData.idToIndex[id] = currentPointerIndex;
-            current->rawPointerData.markIdBit(id,
-                    current->rawPointerData.isHovering(currentPointerIndex));
+            uint32_t id = last.rawPointerData.pointers[lastPointerIndex].id;
+            current.rawPointerData.pointers[currentPointerIndex].id = id;
+            current.rawPointerData.idToIndex[id] = currentPointerIndex;
+            current.rawPointerData.markIdBit(id,
+                    current.rawPointerData.isHovering(currentPointerIndex));
             usedIdBits.markBit(id);
 
 #if DEBUG_POINTER_ASSIGNMENT
@@ -6788,10 +6801,10 @@ void TouchInputMapper::assignPointerIds(const RawState* last, RawState* current)
         uint32_t currentPointerIndex = matchedCurrentBits.markFirstUnmarkedBit();
         uint32_t id = usedIdBits.markFirstUnmarkedBit();
 
-        current->rawPointerData.pointers[currentPointerIndex].id = id;
-        current->rawPointerData.idToIndex[id] = currentPointerIndex;
-        current->rawPointerData.markIdBit(id,
-                current->rawPointerData.isHovering(currentPointerIndex));
+        current.rawPointerData.pointers[currentPointerIndex].id = id;
+        current.rawPointerData.idToIndex[id] = currentPointerIndex;
+        current.rawPointerData.markIdBit(id,
+                current.rawPointerData.isHovering(currentPointerIndex));
 
 #if DEBUG_POINTER_ASSIGNMENT
         ALOGD("assignPointerIds - assigned: cur=%" PRIu32 ", id=%" PRIu32, currentPointerIndex, id);

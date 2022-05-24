@@ -41,6 +41,7 @@ import android.util.IntArray;
 import androidx.test.runner.AndroidJUnit4;
 
 import com.android.server.UiServiceTestCase;
+import com.android.server.pm.PackageManagerService;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -79,6 +80,17 @@ public class SnoozeHelperTest extends UiServiceTestCase {
         assertTrue(Math.abs(actualSnoozedUntilDuration - 1000) < 250);
         assertTrue(mSnoozeHelper.isSnoozed(
                 UserHandle.USER_SYSTEM, r.sbn.getPackageName(), r.getKey()));
+    }
+
+    @Test
+    public void testSnoozeSentToAndroid() throws Exception {
+        NotificationRecord r = getNotificationRecord("pkg", 1, "one", UserHandle.SYSTEM);
+        mSnoozeHelper.snooze(r, 1000);
+        ArgumentCaptor<PendingIntent> captor = ArgumentCaptor.forClass(PendingIntent.class);
+        verify(mAm, times(1)).setExactAndAllowWhileIdle(
+                anyInt(), anyLong(), captor.capture());
+        assertEquals(PackageManagerService.PLATFORM_PACKAGE_NAME,
+                captor.getValue().getIntent().getPackage());
     }
 
     @Test
@@ -224,6 +236,26 @@ public class SnoozeHelperTest extends UiServiceTestCase {
 
         mSnoozeHelper.repost(r.getKey(), UserHandle.USER_SYSTEM);
         verify(mCallback, times(1)).repost(UserHandle.USER_SYSTEM, r);
+    }
+
+    @Test
+    public void testUpdateAfterCancel() throws Exception {
+        // snooze a notification
+        NotificationRecord r = getNotificationRecord("pkg", 1, "one", UserHandle.SYSTEM);
+        mSnoozeHelper.snooze(r , 1000);
+
+        // cancel the notification
+        mSnoozeHelper.cancel(UserHandle.USER_SYSTEM, false);
+
+        // update the notification
+        r = getNotificationRecord("pkg", 1, "one", UserHandle.SYSTEM);
+        mSnoozeHelper.update(UserHandle.USER_SYSTEM, r);
+
+        // verify callback is called when repost (snooze is expired)
+        verify(mCallback, never()).repost(anyInt(), any(NotificationRecord.class));
+        mSnoozeHelper.repost(r.getKey(), UserHandle.USER_SYSTEM);
+        verify(mCallback, times(1)).repost(UserHandle.USER_SYSTEM, r);
+        assertFalse(r.isCanceled);
     }
 
     @Test

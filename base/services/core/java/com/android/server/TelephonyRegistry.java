@@ -31,6 +31,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
+import android.os.Process;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.telephony.CallAttributes;
@@ -251,10 +252,10 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
 
     private PreciseDataConnectionState[] mPreciseDataConnectionState;
 
-    // Nothing here yet, but putting it here in case we want to add more in the future.
-    static final int ENFORCE_COARSE_LOCATION_PERMISSION_MASK = 0;
-
-    static final int ENFORCE_FINE_LOCATION_PERMISSION_MASK =
+    // Starting in Q, almost all cellular location requires FINE location enforcement.
+    // Prior to Q, cellular was available with COARSE location enforcement. Bits in this
+    // list will be checked for COARSE on apps targeting P or earlier and FINE on Q or later.
+    static final int ENFORCE_LOCATION_PERMISSION_MASK =
             PhoneStateListener.LISTEN_CELL_LOCATION
                     | PhoneStateListener.LISTEN_CELL_INFO;
 
@@ -292,7 +293,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                             + newDefaultSubId + " newDefaultPhoneId=" + newDefaultPhoneId);
                     }
 
-                    //Due to possible risk condition,(notify call back using the new
+                    //Due to possible race condition,(notify call back using the new
                     //defaultSubId comes before new defaultSubId update) we need to recall all
                     //possible missed notify callback
                     synchronized (mRecords) {
@@ -469,7 +470,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
         synchronized (mRecords) {
             // register
             IBinder b = callback.asBinder();
-            Record r = add(b);
+            Record r = add(b, Binder.getCallingPid(), false);
 
             if (r == null) {
                 return;
@@ -522,7 +523,7 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
         synchronized (mRecords) {
             // register
             IBinder b = callback.asBinder();
-            Record r = add(b);
+            Record r = add(b, Binder.getCallingPid(), false);
 
             if (r == null) {
                 return;
@@ -643,7 +644,11 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
             synchronized (mRecords) {
                 // register
                 IBinder b = callback.asBinder();
-                Record r = add(b);
+                boolean shouldEnforceListenerLimit =
+                        Binder.getCallingUid() != Process.SYSTEM_UID
+                        && Binder.getCallingUid() != Process.PHONE_UID
+                        && Binder.getCallingUid() != Process.myUid();
+                Record r = add(b, Binder.getCallingPid(), shouldEnforceListenerLimit);
 
                 if (r == null) {
                     return;
@@ -710,11 +715,11 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                     }
                     if (validateEventsAndUserLocked(r, PhoneStateListener.LISTEN_CELL_LOCATION)) {
                         try {
-                            if (DBG_LOC) log("listen: mCellLocation = "
-                                    + mCellLocation[phoneId]);
-                            if (checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
-                                r.callback.onCellLocationChanged(
-                                        new Bundle(mCellLocation[phoneId]));
+                            if (DBG_LOC) log("listen: mCellLocation= " + mCellLocation[phoneId]);
+                            if (checkCoarseLocationAccess(r, Build.VERSION_CODES.BASE)
+                                    && checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
+                                // null will be translated to empty CellLocation object in client.
+                                r.callback.onCellLocationChanged(mCellLocation[phoneId]);
                             }
                         } catch (RemoteException ex) {
                             remove(r.binder);
@@ -761,7 +766,8 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                         try {
                             if (DBG_LOC) log("listen: mCellInfo[" + phoneId + "] = "
                                     + mCellInfo.get(phoneId));
-                            if (checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
+                            if (checkCoarseLocationAccess(r, Build.VERSION_CODES.BASE)
+                                    && checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
                                 r.callback.onCellInfoChanged(mCellInfo.get(phoneId));
                             }
                         } catch (RemoteException ex) {
@@ -893,18 +899,35 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
         return record.canReadCallLog() ? mCallIncomingNumber[phoneId] : "";
     }
 
-    private Record add(IBinder binder) {
+    private Record add(IBinder binder, int callingPid, boolean enforceLimit) {
         Record r;
 
         synchronized (mRecords) {
             final int N = mRecords.size();
+            // While iterating through the records, keep track of how many we have from this pid.
+            int numRecordsForPid = 0;
             for (int i = 0; i < N; i++) {
                 r = mRecords.get(i);
                 if (binder == r.binder) {
                     // Already existed.
                     return r;
                 }
+                if (r.callerPid == callingPid) {
+                    numRecordsForPid++;
+                }
             }
+            // If we've exceeded the limit for registrations, log a warning and quit.
+            if (enforceLimit && numRecordsForPid >= PhoneStateListener.PER_PID_REGISTRATION_LIMIT) {
+                String errorMsg = "Pid " + callingPid + " has exceeded the number of permissible"
+                        + "registered listeners. Ignoring request to add.";
+                loge(errorMsg);
+                throw new IllegalStateException(errorMsg);
+            } else if (enforceLimit
+                    && numRecordsForPid >= PhoneStateListener.PER_PID_REGISTRATION_LIMIT / 2) {
+                Rlog.w(TAG, "Pid " + callingPid + " has exceeded half the number of permissible"
+                        + "registered listeners. Now at " + numRecordsForPid);
+            }
+
             r = new Record();
             r.binder = binder;
             r.deathRecipient = new TelephonyRegistryDeathRecipient(binder);
@@ -1245,7 +1268,8 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                 for (Record r : mRecords) {
                     if (validateEventsAndUserLocked(r, PhoneStateListener.LISTEN_CELL_INFO) &&
                             idMatch(r.subId, subId, phoneId) &&
-                            checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
+                            (checkCoarseLocationAccess(r, Build.VERSION_CODES.BASE)
+                                    && checkFineLocationAccess(r, Build.VERSION_CODES.Q))) {
                         try {
                             if (DBG_LOC) {
                                 log("notifyCellInfo: mCellInfo=" + cellInfo + " r=" + r);
@@ -1556,7 +1580,8 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                 for (Record r : mRecords) {
                     if (validateEventsAndUserLocked(r, PhoneStateListener.LISTEN_CELL_LOCATION) &&
                             idMatch(r.subId, subId, phoneId) &&
-                            checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
+                            (checkCoarseLocationAccess(r, Build.VERSION_CODES.BASE)
+                                    && checkFineLocationAccess(r, Build.VERSION_CODES.Q))) {
                         try {
                             if (DBG_LOC) {
                                 log("notifyCellLocation: cellLocation=" + cellLocation
@@ -2225,19 +2250,13 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                 .setCallingPid(Binder.getCallingPid())
                 .setCallingUid(Binder.getCallingUid());
 
-        boolean shouldCheckLocationPermissions = false;
-        if ((events & ENFORCE_COARSE_LOCATION_PERMISSION_MASK) != 0) {
-            locationQueryBuilder.setMinSdkVersionForCoarse(0);
-            shouldCheckLocationPermissions = true;
-        }
-
-        if ((events & ENFORCE_FINE_LOCATION_PERMISSION_MASK) != 0) {
+        if ((events & ENFORCE_LOCATION_PERMISSION_MASK) != 0) {
             // Everything that requires fine location started in Q. So far...
             locationQueryBuilder.setMinSdkVersionForFine(Build.VERSION_CODES.Q);
-            shouldCheckLocationPermissions = true;
-        }
+            // If we're enforcing fine starting in Q, we also want to enforce coarse even for
+            // older SDK versions.
+            locationQueryBuilder.setMinSdkVersionForCoarse(0);
 
-        if (shouldCheckLocationPermissions) {
             LocationAccessPolicy.LocationPermissionResult result =
                     LocationAccessPolicy.checkLocationPermission(
                             mContext, locationQueryBuilder.build());
@@ -2400,8 +2419,16 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
             try {
                 if (VDBG) log("checkPossibleMissNotify: onServiceStateChanged state=" +
                         mServiceState[phoneId]);
-                r.callback.onServiceStateChanged(
-                        new ServiceState(mServiceState[phoneId]));
+                ServiceState ss = new ServiceState(mServiceState[phoneId]);
+                if (checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
+                    r.callback.onServiceStateChanged(ss);
+                } else if (checkCoarseLocationAccess(r, Build.VERSION_CODES.Q)) {
+                    r.callback.onServiceStateChanged(
+                            ss.sanitizeLocationInfo(false));
+                } else {
+                    r.callback.onServiceStateChanged(
+                            ss.sanitizeLocationInfo(true));
+                }
             } catch (RemoteException ex) {
                 mRemoveList.add(r.binder);
             }
@@ -2440,7 +2467,8 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
                     log("checkPossibleMissNotify: onCellInfoChanged[" + phoneId + "] = "
                             + mCellInfo.get(phoneId));
                 }
-                if (checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
+                if (checkCoarseLocationAccess(r, Build.VERSION_CODES.BASE)
+                        && checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
                     r.callback.onCellInfoChanged(mCellInfo.get(phoneId));
                 }
             } catch (RemoteException ex) {
@@ -2488,10 +2516,14 @@ public class TelephonyRegistry extends ITelephonyRegistry.Stub {
 
         if (validateEventsAndUserLocked(r, PhoneStateListener.LISTEN_CELL_LOCATION)) {
             try {
-                if (DBG_LOC) log("checkPossibleMissNotify: onCellLocationChanged mCellLocation = "
-                        + mCellLocation[phoneId]);
-                if (checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
-                    r.callback.onCellLocationChanged(new Bundle(mCellLocation[phoneId]));
+                if (DBG_LOC) {
+                    log("checkPossibleMissNotify: onCellLocationChanged mCellLocation= "
+                            + mCellLocation[phoneId]);
+                }
+                if (checkCoarseLocationAccess(r, Build.VERSION_CODES.BASE)
+                        && checkFineLocationAccess(r, Build.VERSION_CODES.Q)) {
+                    // null will be translated to empty CellLocation object in client.
+                    r.callback.onCellLocationChanged(mCellLocation[phoneId]);
                 }
             } catch (RemoteException ex) {
                 mRemoveList.add(r.binder);

@@ -3316,6 +3316,7 @@ static const struct VideoCodingMapEntry {
     { MEDIA_MIMETYPE_VIDEO_VP9, OMX_VIDEO_CodingVP9 },
     { MEDIA_MIMETYPE_VIDEO_DOLBY_VISION, OMX_VIDEO_CodingDolbyVision },
     { MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC, OMX_VIDEO_CodingImageHEIC },
+    { MEDIA_MIMETYPE_VIDEO_AV1, OMX_VIDEO_CodingAV1 },
 };
 
 static status_t GetVideoCodingTypeFromMime(
@@ -7825,6 +7826,7 @@ status_t ACodec::setVendorParameters(const sp<AMessage> &params) {
     // don't bother component if we don't have vendor extensions as they may not have implemented
     // the android vendor extension support, which will lead to unnecessary OMX failure logs.
     if (vendorKeys.empty()) {
+        mVendorExtensionsStatus = kExtensionsNone;
         return OK;
     }
 

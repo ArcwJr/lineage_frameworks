@@ -75,7 +75,6 @@ interface IInstalld {
     void idmap(@utf8InCpp String targetApkPath, @utf8InCpp String overlayApkPath, int uid);
     void removeIdmap(@utf8InCpp String overlayApkPath);
     void rmPackageDir(@utf8InCpp String packageDir);
-    void markBootComplete(@utf8InCpp String instructionSet);
     void freeCache(@nullable @utf8InCpp String uuid, long targetFreeBytes,
             long cacheReservedBytes, int flags);
     void linkNativeLibraryDirectory(@nullable @utf8InCpp String uuid,
@@ -127,4 +126,6 @@ interface IInstalld {
 
     const int FLAG_USE_QUOTA = 0x1000;
     const int FLAG_FORCE = 0x2000;
+
+    const int FLAG_CLEAR_APP_DATA_KEEP_ART_PROFILES = 0x20000;
 }

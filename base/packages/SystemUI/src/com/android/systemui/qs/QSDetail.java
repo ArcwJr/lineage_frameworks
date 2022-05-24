@@ -25,9 +25,12 @@ import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.drawable.Animatable;
 import android.util.AttributeSet;
+import android.util.Pair;
 import android.util.SparseArray;
+import android.view.DisplayCutout;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityEvent;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -42,6 +45,7 @@ import com.android.systemui.SysUiServiceProvider;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.qs.DetailAdapter;
 import com.android.systemui.statusbar.CommandQueue;
+import com.android.systemui.statusbar.phone.PhoneStatusBarView;
 
 public class QSDetail extends LinearLayout {
 
@@ -61,6 +65,7 @@ public class QSDetail extends LinearLayout {
     protected TextView mQsDetailHeaderTitle;
     protected Switch mQsDetailHeaderSwitch;
     protected ImageView mQsDetailHeaderProgress;
+    protected View mQsDetailTopSpace;
 
     protected QSTileHost mHost;
 
@@ -88,6 +93,12 @@ public class QSDetail extends LinearLayout {
         for (int i = 0; i < mDetailViews.size(); i++) {
             mDetailViews.valueAt(i).dispatchConfigurationChanged(newConfig);
         }
+
+        // Update top space height in orientation change
+        mQsDetailTopSpace.getLayoutParams().height =
+                mContext.getResources().getDimensionPixelSize(
+                        com.android.internal.R.dimen.quick_qs_offset_height);
+        mQsDetailTopSpace.setLayoutParams(mQsDetailTopSpace.getLayoutParams());
     }
 
     @Override
@@ -101,10 +112,11 @@ public class QSDetail extends LinearLayout {
         mQsDetailHeaderTitle = (TextView) mQsDetailHeader.findViewById(android.R.id.title);
         mQsDetailHeaderSwitch = (Switch) mQsDetailHeader.findViewById(android.R.id.toggle);
         mQsDetailHeaderProgress = findViewById(R.id.qs_detail_header_progress);
+        mQsDetailTopSpace = findViewById(R.id.qs_detail_top_space);
 
         updateDetailText();
 
-        mClipper = new QSDetailClipper(this);
+        mClipper = new QSDetailClipper(findViewById(R.id.detail_container));
 
         final OnClickListener doneListener = new OnClickListener() {
             @Override
@@ -140,6 +152,25 @@ public class QSDetail extends LinearLayout {
         if (!qsExpanded) {
             mTriggeredExpand = false;
         }
+    }
+
+    @Override
+    public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+        DisplayCutout cutout = insets.getDisplayCutout();
+        Pair<Integer, Integer> padding = PhoneStatusBarView.cornerCutoutMargins(
+                cutout, getDisplay());
+        if (padding == null) {
+            mQsDetailHeader.setPaddingRelative(
+                    getResources().getDimensionPixelSize(R.dimen.qs_detail_header_padding),
+                    mQsDetailHeader.getPaddingTop(),
+                    getResources().getDimensionPixelSize(R.dimen.qs_panel_padding),
+                    mQsDetailHeader.getPaddingBottom()
+            );
+        } else {
+            mQsDetailHeader.setPadding(padding.first, mQsDetailHeader.getPaddingTop(),
+                    padding.second, mQsDetailHeader.getPaddingBottom());
+        }
+        return super.onApplyWindowInsets(insets);
     }
 
     private void updateDetailText() {
@@ -355,7 +386,6 @@ public class QSDetail extends LinearLayout {
             // Only hide content if still in detail state.
             if (mDetailAdapter != null) {
                 mQsPanel.setGridContentVisibility(false);
-                mHeader.setVisibility(View.INVISIBLE);
                 mFooter.setVisibility(View.INVISIBLE);
             }
             mAnimatingOpen = false;

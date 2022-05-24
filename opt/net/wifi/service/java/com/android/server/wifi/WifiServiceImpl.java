@@ -65,6 +65,7 @@ import android.net.wifi.IDppCallback;
 import android.net.wifi.INetworkRequestMatchCallback;
 import android.net.wifi.IOnWifiUsabilityStatsListener;
 import android.net.wifi.ISoftApCallback;
+import android.net.wifi.IStaStateCallback;
 import android.net.wifi.ITrafficStateCallback;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiActivityEnergyInfo;
@@ -187,6 +188,7 @@ public class WifiServiceImpl extends BaseWifiService {
     /* Backup/Restore Module */
     private final WifiBackupRestore mWifiBackupRestore;
     private final WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
+    private WifiStaStateNotifier mWifiStaStateNotifier;
 
     private WifiLog mLog;
     /**
@@ -489,6 +491,7 @@ public class WifiServiceImpl extends BaseWifiService {
         mPowerProfile = mWifiInjector.getPowerProfile();
         mWifiNetworkSuggestionsManager = mWifiInjector.getWifiNetworkSuggestionsManager();
         mDppManager = mWifiInjector.getDppManager();
+        mWifiStaStateNotifier = mWifiInjector.getWifiStaStateNotifier();
     }
 
     /**
@@ -498,6 +501,39 @@ public class WifiServiceImpl extends BaseWifiService {
     @VisibleForTesting
     public void setWifiHandlerLogForTest(WifiLog log) {
         mAsyncChannelExternalClientHandler.setWifiLog(log);
+    }
+
+    // Return true if it is DUAL SIM and either SIM is active.
+    private boolean checkDualSimActive() {
+        TelephonyManager tm = (TelephonyManager)
+                mContext.getSystemService(Context.TELEPHONY_SERVICE);
+
+        if (tm == null) {
+            Log.i(TAG, "checkDualSimActive() is false, tm == null");
+            return false;
+        }
+
+        int phoneCount = tm.getPhoneCount();
+        if (phoneCount < 2) {
+            Log.i(TAG, "checkDualSimActive() is false, phoneCount="
+                    + phoneCount + " slot0State=" + tm.getSimState(0));
+            return false;
+        }
+
+        int slot0State = tm.getSimState(0);
+        int slot1State = tm.getSimState(1);
+        if (slot0State != TelephonyManager.SIM_STATE_READY &&
+                slot1State != TelephonyManager.SIM_STATE_READY) {
+            Log.i(TAG, "checkDualSimActive() is false, slot0State="
+                     + slot0State + " slot1State=" + slot1State);
+            return false;
+        }
+
+        Log.i(TAG, "checkDualSimActive() is true, phoneCount="
+                + phoneCount
+                + " slot0State=" + slot0State + " slot1State=" + slot1State);
+
+        return true;
     }
 
     /**
@@ -538,6 +574,10 @@ public class WifiServiceImpl extends BaseWifiService {
                     public void onReceive(Context context, Intent intent) {
                         String state = intent.getStringExtra(IccCardConstants.INTENT_KEY_ICC_STATE);
                         if (IccCardConstants.INTENT_VALUE_ICC_ABSENT.equals(state)) {
+                            if (checkDualSimActive()) {
+                                Log.d(TAG, "Not resetting networks as other SIM may active");
+                                return;
+                            }
                             Log.d(TAG, "resetting networks because SIM was removed");
                             mClientModeImpl.resetSimAuthNetworks(false);
                         } else if (IccCardConstants.INTENT_VALUE_ICC_LOADED.equals(state)) {
@@ -3210,6 +3250,33 @@ public class WifiServiceImpl extends BaseWifiService {
         // Post operation to handler thread
         mWifiInjector.getClientModeImplHandler().post(() -> {
             mWifiTrafficPoller.removeCallback(callbackIdentifier);
+        });
+    }
+
+    @Override
+    public void registerStaStateCallback(IBinder binder, IStaStateCallback callback,
+                                                int callbackIdentifier) {
+        if (binder == null) {
+            throw new IllegalArgumentException("Binder must not be null");
+        }
+        if (callback == null) {
+            throw new IllegalArgumentException("Callback must not be null");
+        }
+        if (mVerboseLoggingEnabled) {
+            mLog.info("registerStaStateCallback uid=%").c(Binder.getCallingUid()).flush();
+        }
+        mWifiInjector.getClientModeImplHandler().post(() -> {
+            mWifiStaStateNotifier.addCallback(binder, callback, callbackIdentifier);
+        });
+    }
+
+    @Override
+    public void unregisterStaStateCallback(int callbackIdentifier) {
+        if (mVerboseLoggingEnabled) {
+            mLog.info("unregisterStaStateCallback uid=%").c(Binder.getCallingUid()).flush();
+        }
+        mWifiInjector.getClientModeImplHandler().post(() -> {
+            mWifiStaStateNotifier.removeCallback(callbackIdentifier);
         });
     }
 

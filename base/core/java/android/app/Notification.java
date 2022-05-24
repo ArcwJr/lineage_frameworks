@@ -205,7 +205,7 @@ public class Notification implements Parcelable
      * <p>
      * Avoids spamming the system with overly large strings such as full e-mails.
      */
-    private static final int MAX_CHARSEQUENCE_LENGTH = 5 * 1024;
+    private static final int MAX_CHARSEQUENCE_LENGTH = 1024;
 
     /**
      * Maximum entries of reply text that are accepted by Builder and friends.
@@ -2948,6 +2948,19 @@ public class Notification implements Parcelable
         builder.setContentIntent(contentIntent);
 
         builder.build(); // callers expect this notification to be ready to use
+    }
+
+    /**
+     * Sets the token used for background operations for the pending intents associated with this
+     * notification.
+     *
+     * This token is automatically set during deserialization for you, you usually won't need to
+     * call this unless you want to change the existing token, if any.
+     *
+     * @hide
+     */
+    public void setAllowlistToken(@Nullable IBinder token) {
+        mWhitelistToken = token;
     }
 
     /**
@@ -7561,7 +7574,7 @@ public class Notification implements Parcelable
              */
             public Message(@NonNull CharSequence text, long timestamp, @Nullable Person sender,
                     boolean remoteInputHistory) {
-                mText = text;
+                mText = safeCharSequence(text);
                 mTimestamp = timestamp;
                 mSender = sender;
                 mRemoteInputHistory = remoteInputHistory;
@@ -7675,7 +7688,7 @@ public class Notification implements Parcelable
                 bundle.putLong(KEY_TIMESTAMP, mTimestamp);
                 if (mSender != null) {
                     // Legacy listeners need this
-                    bundle.putCharSequence(KEY_SENDER, mSender.getName());
+                    bundle.putCharSequence(KEY_SENDER, safeCharSequence(mSender.getName()));
                     bundle.putParcelable(KEY_SENDER_PERSON, mSender);
                 }
                 if (mDataMimeType != null) {

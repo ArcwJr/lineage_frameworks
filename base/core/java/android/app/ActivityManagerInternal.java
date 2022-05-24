@@ -29,7 +29,6 @@ import android.content.pm.UserInfo;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.TransactionTooLargeException;
-import android.view.RemoteAnimationAdapter;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -300,7 +299,7 @@ public abstract class ActivityManagerInternal {
 
     /** Starts a given process. */
     public abstract void startProcess(String processName, ApplicationInfo info,
-            boolean knownToBeDead, String hostingType, ComponentName hostingName);
+            boolean knownToBeDead, boolean isTop, String hostingType, ComponentName hostingName);
 
     /** Starts up the starting activity process for debugging if needed.
      * This function needs to be called synchronously from WindowManager context so the caller
@@ -336,6 +335,21 @@ public abstract class ActivityManagerInternal {
     public abstract boolean hasRunningForegroundService(int uid, int foregroundServiceType);
 
     /**
+     * Returns {@code true} if the given notification channel currently has a
+     * notification associated with a foreground service.  This is an AMS check
+     * because that is the source of truth for the FGS state.
+     */
+    public abstract boolean hasForegroundServiceNotification(String pkg, int userId,
+            String channelId);
+
+    /**
+     * If the given app has any FGSs whose notifications are in the given channel,
+     * stop them.
+     */
+    public abstract void stopForegroundServicesForChannel(String pkg, int userId,
+            String channelId);
+
+    /**
      * Registers the specified {@code processObserver} to be notified of future changes to
      * process state.
      */
@@ -345,4 +359,7 @@ public abstract class ActivityManagerInternal {
      * Unregisters the specified {@code processObserver}.
      */
     public abstract void unregisterProcessObserver(IProcessObserver processObserver);
+
+    /** Returns true if the given UID is registered as an active instrumentation. */
+    public abstract boolean isActiveInstrumentation(int uid);
 }

@@ -63,9 +63,13 @@ android_library {
         "SystemUI-tags",
         "SystemUI-proto",
         "dagger2-2.19",
-        "jsr330"
+        "jsr330",
+        "org.lineageos.platform.internal",
+        "vendor.lineage.biometrics.fingerprint.inscreen-V1.0-java",
+        "vendor.lineage.powershare-V1.0-java",
     ],
     manifest: "AndroidManifest.xml",
+    additional_manifests: ["LineageManifest.xml"],
 
     libs: [
         "telephony-common",
@@ -119,7 +123,9 @@ android_library {
         "testables",
         "truth-prebuilt",
         "dagger2-2.19",
-        "jsr330"
+        "jsr330",
+        "org.lineageos.platform.internal",
+        "vendor.lineage.biometrics.fingerprint.inscreen-V1.0-java",
     ],
     libs: [
         "android.test.runner",

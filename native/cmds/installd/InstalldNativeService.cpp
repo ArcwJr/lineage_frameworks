@@ -678,11 +678,13 @@ binder::Status InstalldNativeService::destroyAppData(const std::unique_ptr<std::
         if (delete_dir_contents_and_dir(path) != 0) {
             res = error("Failed to delete " + path);
         }
-        destroy_app_current_profiles(packageName, userId);
-        // TODO(calin): If the package is still installed by other users it's probably
-        // beneficial to keep the reference profile around.
-        // Verify if it's ok to do that.
-        destroy_app_reference_profile(packageName);
+        if ((flags & FLAG_CLEAR_APP_DATA_KEEP_ART_PROFILES) == 0) {
+            destroy_app_current_profiles(packageName, userId);
+            // TODO(calin): If the package is still installed by other users it's probably
+            // beneficial to keep the reference profile around.
+            // Verify if it's ok to do that.
+            destroy_app_reference_profile(packageName);
+        }
     }
     if (flags & FLAG_STORAGE_EXTERNAL) {
         std::lock_guard<std::recursive_mutex> lock(mMountsLock);
@@ -1996,6 +1998,9 @@ binder::Status InstalldNativeService::getExternalSize(const std::unique_ptr<std:
         auto obbPath = StringPrintf("%s/Android/obb",
                 create_data_media_path(uuid_, userId).c_str());
         calculate_tree_size(obbPath, &obbSize);
+        if (!(flags & FLAG_USE_QUOTA)) {
+            totalSize -= obbSize;
+        }
         ATRACE_END();
     }
 
@@ -2134,26 +2139,6 @@ binder::Status InstalldNativeService::compileLayouts(const std::string& apkPath,
     const char* out_dex_file = outDexFile.c_str();
     *_aidl_return = android::installd::view_compiler(apk_path, package_name, out_dex_file, uid);
     return *_aidl_return ? ok() : error("viewcompiler failed");
-}
-
-binder::Status InstalldNativeService::markBootComplete(const std::string& instructionSet) {
-    ENFORCE_UID(AID_SYSTEM);
-    std::lock_guard<std::recursive_mutex> lock(mLock);
-
-    const char* instruction_set = instructionSet.c_str();
-
-    char boot_marker_path[PKG_PATH_MAX];
-    sprintf(boot_marker_path,
-          "%s/%s/%s/.booting",
-          android_data_dir.c_str(),
-          DALVIK_CACHE,
-          instruction_set);
-
-    ALOGV("mark_boot_complete : %s", boot_marker_path);
-    if (unlink(boot_marker_path) != 0) {
-        return error(StringPrintf("Failed to unlink %s", boot_marker_path));
-    }
-    return ok();
 }
 
 binder::Status InstalldNativeService::linkNativeLibraryDirectory(

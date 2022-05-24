@@ -327,7 +327,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     @UnsupportedAppUsage
     protected Phone mImsPhone = null;
 
-    private final AtomicReference<RadioCapability> mRadioCapability =
+    protected final AtomicReference<RadioCapability> mRadioCapability =
             new AtomicReference<RadioCapability>();
 
     private static final int DEFAULT_REPORT_INTERVAL_MS = 200;
@@ -379,6 +379,8 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     private final RegistrantList mAllDataDisconnectedRegistrants = new RegistrantList();
 
     private final RegistrantList mCellInfoRegistrants = new RegistrantList();
+
+    private final RegistrantList mOtaspRegistrants = new RegistrantList();
 
     protected Registrant mPostDialHandler;
 
@@ -1418,7 +1420,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
     private void updateSavedNetworkOperator(NetworkSelectMessage nsm) {
         int subId = getSubId();
-        if (SubscriptionManager.isValidSubscriptionId(subId)) {
+        if (SubscriptionController.getInstance().isActiveSubId(subId)) {
             // open the shared preferences editor, and write the value.
             // nsm.operatorNumeric is "" if we're in automatic.selection.
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(getContext());
@@ -1923,7 +1925,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     private int getCallForwardingIndicatorFromSharedPref() {
         int status = IccRecords.CALL_FORWARDING_STATUS_DISABLED;
         int subId = getSubId();
-        if (SubscriptionManager.isValidSubscriptionId(subId)) {
+        if (SubscriptionController.getInstance().isActiveSubId(subId)) {
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
             status = sp.getInt(CF_STATUS + subId, IccRecords.CALL_FORWARDING_STATUS_UNKNOWN);
             Rlog.d(LOG_TAG, "getCallForwardingIndicatorFromSharedPref: for subId " + subId + "= " +
@@ -2356,7 +2358,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
     @UnsupportedAppUsage
     public void notifyOtaspChanged(int otaspMode) {
-        mNotifier.notifyOtaspChanged(this, otaspMode);
+        mOtaspRegistrants.notifyRegistrants(new AsyncResult(null, otaspMode, null));
     }
 
     public void notifyVoiceActivationStateChanged(int state) {
@@ -2495,7 +2497,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     public void setVoiceMessageCount(int countWaiting) {
         mVmCount = countWaiting;
         int subId = getSubId();
-        if (SubscriptionManager.isValidSubscriptionId(subId)) {
+        if (SubscriptionController.getInstance().isActiveSubId(subId)) {
 
             Rlog.d(LOG_TAG, "setVoiceMessageCount: Storing Voice Mail Count = " + countWaiting +
                     " for mVmCountKey = " + VM_COUNT + subId + " in preferences.");
@@ -2524,7 +2526,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     protected int getStoredVoiceMessageCount() {
         int countVoiceMessages = 0;
         int subId = getSubId();
-        if (SubscriptionManager.isValidSubscriptionId(subId)) {
+        if (SubscriptionController.getInstance().isActiveSubId(subId)) {
             int invalidCount = -2;  //-1 is not really invalid. It is used for unknown number of vm
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
             int countFromSP = sp.getInt(VM_COUNT + subId, invalidCount);
@@ -2751,6 +2753,42 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      */
     public  boolean isOtaSpNumber(String dialStr) {
         return false;
+    }
+
+    /**
+     * Register for notifications when OTA Service Provisioning mode has changed.
+     *
+     * <p>The mode is integer. {@link TelephonyManager#OTASP_UNKNOWN}
+     * means the value is currently unknown and the system should wait until
+     * {@link TelephonyManager#OTASP_NEEDED} or {@link TelephonyManager#OTASP_NOT_NEEDED} is
+     * received before making the decision to perform OTASP or not.
+     *
+     * @param h Handler that receives the notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    public void registerForOtaspChange(Handler h, int what, Object obj) {
+        checkCorrectThread(h);
+        mOtaspRegistrants.addUnique(h, what, obj);
+        // notify first
+        new Registrant(h, what, obj).notifyRegistrant(new AsyncResult(null, getOtasp(), null));
+    }
+
+    /**
+     * Unegister for notifications when OTA Service Provisioning mode has changed.
+     * @param h Handler to be removed from the registrant list.
+     */
+    public void unregisterForOtaspChange(Handler h) {
+        mOtaspRegistrants.remove(h);
+    }
+
+    /**
+     * Returns the current OTA Service Provisioning mode.
+     *
+     * @see registerForOtaspChange
+     */
+    public int getOtasp() {
+        return TelephonyManager.OTASP_UNKNOWN;
     }
 
     /**
@@ -3732,7 +3770,7 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
     protected void setPreferredNetworkTypeIfSimLoaded() {
         int subId = getSubId();
-        if (SubscriptionManager.isValidSubscriptionId(subId)) {
+        if (SubscriptionManager.from(mContext).isActiveSubId(subId)) {
             int type = PhoneFactory.calculatePreferredNetworkType(mContext, getSubId());
             setPreferredNetworkType(type, null);
         }
@@ -3952,6 +3990,10 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      * @param msg The message to dispatch when the USSD session terminated.
      */
     public void cancelUSSD(Message msg) {
+    }
+
+    public String getOperatorNumeric() {
+        return "";
     }
 
     /**

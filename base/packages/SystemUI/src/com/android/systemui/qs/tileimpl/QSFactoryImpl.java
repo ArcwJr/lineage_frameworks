@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 The Android Open Source Project
+ * Copyright (C) 2017-2018 The LineageOS Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use mHost file
  * except in compliance with the License. You may obtain a copy of the License at
@@ -26,23 +27,36 @@ import com.android.systemui.plugins.qs.QSTile;
 import com.android.systemui.plugins.qs.QSTileView;
 import com.android.systemui.qs.QSTileHost;
 import com.android.systemui.qs.external.CustomTile;
+import com.android.systemui.qs.tiles.AODTile;
+import com.android.systemui.qs.tiles.AdbOverNetworkTile;
 import com.android.systemui.qs.tiles.AirplaneModeTile;
+import com.android.systemui.qs.tiles.AmbientDisplayTile;
 import com.android.systemui.qs.tiles.BatterySaverTile;
 import com.android.systemui.qs.tiles.BluetoothTile;
+import com.android.systemui.qs.tiles.CaffeineTile;
 import com.android.systemui.qs.tiles.CastTile;
 import com.android.systemui.qs.tiles.CellularTile;
 import com.android.systemui.qs.tiles.ColorInversionTile;
 import com.android.systemui.qs.tiles.DataSaverTile;
 import com.android.systemui.qs.tiles.DndTile;
 import com.android.systemui.qs.tiles.FlashlightTile;
+import com.android.systemui.qs.tiles.HeadsUpTile;
 import com.android.systemui.qs.tiles.HotspotTile;
 import com.android.systemui.qs.tiles.IntentTile;
+import com.android.systemui.qs.tiles.LiveDisplayTile;
 import com.android.systemui.qs.tiles.LocationTile;
 import com.android.systemui.qs.tiles.NfcTile;
 import com.android.systemui.qs.tiles.NightDisplayTile;
+import com.android.systemui.qs.tiles.PowerShareTile;
+import com.android.systemui.qs.tiles.ProfilesTile;
+import com.android.systemui.qs.tiles.ReadingModeTile;
 import com.android.systemui.qs.tiles.RotationLockTile;
+import com.android.systemui.qs.tiles.SyncTile;
 import com.android.systemui.qs.tiles.UiModeNightTile;
+import com.android.systemui.qs.tiles.UsbTetherTile;
 import com.android.systemui.qs.tiles.UserTile;
+import com.android.systemui.qs.tiles.VolumeTile;
+import com.android.systemui.qs.tiles.VpnTile;
 import com.android.systemui.qs.tiles.WifiTile;
 import com.android.systemui.qs.tiles.WorkModeTile;
 import com.android.systemui.util.leak.GarbageMonitor;
@@ -75,6 +89,19 @@ public class QSFactoryImpl implements QSFactory {
     private final Provider<NfcTile> mNfcTileProvider;
     private final Provider<GarbageMonitor.MemoryTile> mMemoryTileProvider;
     private final Provider<UiModeNightTile> mUiModeNightTileProvider;
+    private final Provider<AdbOverNetworkTile> mAdbOverNetworkTileProvider;
+    private final Provider<AmbientDisplayTile> mAmbientDisplayTileProvider;
+    private final Provider<CaffeineTile> mCaffeineTileProvider;
+    private final Provider<HeadsUpTile> mHeadsUpTileProvider;
+    private final Provider<LiveDisplayTile> mLiveDisplayTileProvider;
+    private final Provider<AODTile> mAODTileProvider;
+    private final Provider<PowerShareTile> mPowerShareTileProvider;
+    private final Provider<ProfilesTile> mProfilesTileProvider;
+    private final Provider<ReadingModeTile> mReadingModeTileProvider;
+    private final Provider<SyncTile> mSyncTileProvider;
+    private final Provider<UsbTetherTile> mUsbTetherTileProvider;
+    private final Provider<VolumeTile> mVolumeTileProvider;
+    private final Provider<VpnTile> mVpnTileProvider;
 
     private QSTileHost mHost;
 
@@ -97,7 +124,20 @@ public class QSFactoryImpl implements QSFactory {
             Provider<NightDisplayTile> nightDisplayTileProvider,
             Provider<NfcTile> nfcTileProvider,
             Provider<GarbageMonitor.MemoryTile> memoryTileProvider,
-            Provider<UiModeNightTile> uiModeNightTileProvider) {
+            Provider<UiModeNightTile> uiModeNightTileProvider,
+            Provider<AdbOverNetworkTile> adbOverNetworkTileProvider,
+            Provider<AmbientDisplayTile> ambientDisplayTileProvider,
+            Provider<CaffeineTile> caffeineTileProvider,
+            Provider<HeadsUpTile> headsUpTileProvider,
+            Provider<LiveDisplayTile> liveDisplayTileProvider,
+            Provider<PowerShareTile> powerShareTileProvider,
+            Provider<ProfilesTile> profilesTileProvider,
+            Provider<ReadingModeTile> readingModeTileProvider,
+            Provider<SyncTile> syncTileProvider,
+            Provider<UsbTetherTile> usbTetherTileProvider,
+            Provider<VolumeTile> volumeTileProvider,
+            Provider<VpnTile> vpnTileProvider,
+            Provider<AODTile> aodTileProvider) {
         mWifiTileProvider = wifiTileProvider;
         mBluetoothTileProvider = bluetoothTileProvider;
         mCellularTileProvider = cellularTileProvider;
@@ -117,6 +157,19 @@ public class QSFactoryImpl implements QSFactory {
         mNfcTileProvider = nfcTileProvider;
         mMemoryTileProvider = memoryTileProvider;
         mUiModeNightTileProvider = uiModeNightTileProvider;
+        mAdbOverNetworkTileProvider = adbOverNetworkTileProvider;
+        mAmbientDisplayTileProvider = ambientDisplayTileProvider;
+        mCaffeineTileProvider = caffeineTileProvider;
+        mHeadsUpTileProvider = headsUpTileProvider;
+        mLiveDisplayTileProvider = liveDisplayTileProvider;
+        mAODTileProvider = aodTileProvider;
+        mPowerShareTileProvider = powerShareTileProvider;
+        mProfilesTileProvider = profilesTileProvider;
+        mReadingModeTileProvider = readingModeTileProvider;
+        mSyncTileProvider = syncTileProvider;
+        mUsbTetherTileProvider = usbTetherTileProvider;
+        mVolumeTileProvider = volumeTileProvider;
+        mVpnTileProvider = vpnTileProvider;
     }
 
     public void setHost(QSTileHost host) {
@@ -132,8 +185,8 @@ public class QSFactoryImpl implements QSFactory {
     }
 
     private QSTileImpl createTileInternal(String tileSpec) {
-        // Stock tiles.
         switch (tileSpec) {
+            // Stock tiles.
             case "wifi":
                 return mWifiTileProvider.get();
             case "bt":
@@ -170,6 +223,33 @@ public class QSFactoryImpl implements QSFactory {
                 return mNfcTileProvider.get();
             case "dark":
                 return mUiModeNightTileProvider.get();
+            // Custom tiles.
+            case "adb_network":
+                return mAdbOverNetworkTileProvider.get();
+            case "ambient_display":
+                return mAmbientDisplayTileProvider.get();
+            case "caffeine":
+                return mCaffeineTileProvider.get();
+            case "heads_up":
+                return mHeadsUpTileProvider.get();
+            case "livedisplay":
+                return mLiveDisplayTileProvider.get();
+            case "aod":
+                return mAODTileProvider.get();
+            case "powershare":
+                return mPowerShareTileProvider.get();
+            case "profiles":
+                return mProfilesTileProvider.get();
+            case "reading_mode":
+                return mReadingModeTileProvider.get();
+            case "sync":
+                return mSyncTileProvider.get();
+            case "usb_tether":
+                return mUsbTetherTileProvider.get();
+            case "volume_panel":
+                return mVolumeTileProvider.get();
+            case "vpn":
+                return mVpnTileProvider.get();
         }
 
         // Intent tiles.

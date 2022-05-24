@@ -18,16 +18,19 @@ package com.android.server.policy.keyguard;
 
 import android.app.ActivityManager;
 import android.content.Context;
+import android.content.ContentResolver;
 import android.os.RemoteException;
-import android.os.ServiceManager;
-import android.security.keystore.IKeystoreService;
 import android.util.Slog;
 
 import com.android.internal.policy.IKeyguardService;
 import com.android.internal.policy.IKeyguardStateCallback;
 import com.android.internal.widget.LockPatternUtils;
 
+import lineageos.providers.LineageSettings;
+import vendor.lineage.trust.V1_0.IUsbRestrict;
+
 import java.io.PrintWriter;
+import java.util.NoSuchElementException;
 
 /**
  * Maintains a cached copy of Keyguard's state.
@@ -53,15 +56,14 @@ public class KeyguardStateMonitor extends IKeyguardStateCallback.Stub {
     private final LockPatternUtils mLockPatternUtils;
     private final StateCallback mCallback;
 
-    IKeystoreService mKeystoreService;
+    private IUsbRestrict mUsbRestrictor = null;
+    private ContentResolver mContentResolver;
 
     public KeyguardStateMonitor(Context context, IKeyguardService service, StateCallback callback) {
         mLockPatternUtils = new LockPatternUtils(context);
         mCurrentUserId = ActivityManager.getCurrentUser();
         mCallback = callback;
-
-        mKeystoreService = IKeystoreService.Stub.asInterface(ServiceManager
-                .getService("android.security.keystore"));
+        mContentResolver = context.getContentResolver();
 
         try {
             service.addStateMonitorCallback(this);
@@ -90,26 +92,37 @@ public class KeyguardStateMonitor extends IKeyguardStateCallback.Stub {
         return mHasLockscreenWallpaper;
     }
 
+    public int getCurrentUser() {
+        return mCurrentUserId;
+    }
+
     @Override // Binder interface
-    public void onShowingStateChanged(boolean showing) {
+    public void onShowingStateChanged(boolean showing, int userId) {
+        if (userId != mCurrentUserId) return;
+
         mIsShowing = showing;
 
         mCallback.onShowingChanged();
-        int retry = 2;
-        while (retry > 0) {
+
+        if (mUsbRestrictor == null) {
             try {
-                mKeystoreService.onKeyguardVisibilityChanged(showing, mCurrentUserId);
-                break;
-            } catch (RemoteException e) {
-                if (retry == 2) {
-                    Slog.w(TAG, "Error informing keystore of screen lock. Keystore may have died"
-                            + " -> refreshing service token and retrying");
-                    mKeystoreService = IKeystoreService.Stub.asInterface(ServiceManager
-                            .getService("android.security.keystore"));
-                } else {
-                    Slog.e(TAG, "Error informing keystore of screen lock after retrying once", e);
+                mUsbRestrictor = IUsbRestrict.getService();
+                if (mUsbRestrictor == null) {
+                    // Ignore, the hal is not available
+                    return;
                 }
-                --retry;
+            } catch (NoSuchElementException | RemoteException ignored) {
+                return;
+            }
+        }
+
+        boolean shouldRestrictUsb = LineageSettings.Secure.getInt(mContentResolver,
+                LineageSettings.Secure.TRUST_RESTRICT_USB_KEYGUARD, 0) == 1;
+        if (shouldRestrictUsb) {
+            try {
+                mUsbRestrictor.setEnabled(showing);
+            } catch (RemoteException ignored) {
+                // This feature is not supported
             }
         }
     }
@@ -121,10 +134,6 @@ public class KeyguardStateMonitor extends IKeyguardStateCallback.Stub {
 
     public synchronized void setCurrentUser(int userId) {
         mCurrentUserId = userId;
-    }
-
-    private synchronized int getCurrentUser() {
-        return mCurrentUserId;
     }
 
     @Override // Binder interface

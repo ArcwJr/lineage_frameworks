@@ -205,6 +205,10 @@
     <!-- Notification text displayed when we fail to take a screenshot. [CHAR LIMIT=100] -->
     <string name="screenshot_failed_to_capture_text">Taking screenshots isn\'t allowed by the app or
         your organization</string>
+    <!-- Clickable icon content description for partial screenshot capture -->
+    <string name="global_screenshot_selector_capture_description">Capture partial screenshot</string>
+    <!-- Clickable icon content description for partial screenshot cancel -->
+    <string name="global_screenshot_selector_cancel_description">Cancel partial screenshot</string>
 
     <!-- Notification title displayed for screen recording [CHAR LIMIT=50]-->
     <string name="screenrecord_name">Screen Recording</string>
@@ -438,16 +442,16 @@
     <string name="data_connection_lte_plus">LTE+</string>
 
     <!-- Content description of the data connection type 5Ge. [CHAR LIMIT=NONE] -->
-    <string name="data_connection_5ge" translate="false">5Ge</string>
+    <string name="data_connection_5ge" translatable="false">5Ge</string>
 
     <!-- Content description of the data connection type 5Ge with HTML styling. DO NOT TRANSLATE [CHAR LIMIT=NONE] -->
     <string name="data_connection_5ge_html" translate="false"> &lt;i>5G &lt;small>E&lt;/small>&lt;/i> </string>
 
     <!-- Content description of the data connection type 5G. [CHAR LIMIT=NONE] -->
-    <string name="data_connection_5g" translate="false">5G</string>
+    <string name="data_connection_5g" translatable="false">5G</string>
 
     <!-- Content description of the data connection type 5G+. [CHAR LIMIT=NONE] -->
-    <string name="data_connection_5g_plus" translate="false">5G+</string>
+    <string name="data_connection_5g_plus" translatable="false">5G+</string>
 
     <!-- Content description of the data connection type CDMA. [CHAR LIMIT=NONE] -->
     <string name="data_connection_cdma">1X</string>
@@ -1340,6 +1344,9 @@
 
     <!-- Indication on the keyguard that appears when the user disables trust agents until the next time they unlock manually. [CHAR LIMIT=NONE] -->
     <string name="keyguard_indication_trust_disabled">Device will stay locked until you manually unlock</string>
+
+    <!-- Indication on the keyguard that appears when trust agents unlocks the device and device is plugged in. [CHAR LIMIT=NONE] -->
+    <string name="keyguard_indication_trust_unlocked_plugged_in"><xliff:g id="keyguard_indication" example="Kept unlocked by TrustAgent">%1$s</xliff:g>\n<xliff:g id="power_indication" example="Charging Slowly">%2$s</xliff:g></string>
 
     <!-- Title of notification educating the user about enabling notifications on the lockscreen. [CHAR LIMIT=40] -->
     <string name="hidden_notifications_title">Get notifications faster</string>

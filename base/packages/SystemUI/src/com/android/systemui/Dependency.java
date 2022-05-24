@@ -16,7 +16,6 @@ package com.android.systemui;
 
 import android.annotation.Nullable;
 import android.app.INotificationManager;
-import android.content.res.Configuration;
 import android.hardware.SensorPrivacyManager;
 import android.hardware.display.NightDisplayListener;
 import android.os.Handler;
@@ -47,6 +46,7 @@ import com.android.systemui.plugins.VolumeDialogController;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.power.EnhancedEstimates;
 import com.android.systemui.power.PowerUI;
+import com.android.systemui.privacy.PrivacyItemController;
 import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.shared.plugins.PluginManager;
 import com.android.systemui.shared.system.ActivityManagerWrapper;
@@ -280,6 +280,7 @@ public class Dependency {
     @Inject Lazy<SensorPrivacyManager> mSensorPrivacyManager;
     @Inject Lazy<AutoHideController> mAutoHideController;
     @Inject Lazy<ForegroundServiceNotificationListener> mForegroundServiceNotificationListener;
+    @Inject Lazy<PrivacyItemController> mPrivacyItemController;
     @Inject @Named(BG_LOOPER_NAME) Lazy<Looper> mBgLooper;
     @Inject @Named(BG_HANDLER_NAME) Lazy<Handler> mBgHandler;
     @Inject @Named(MAIN_HANDLER_NAME) Lazy<Handler> mMainHandler;
@@ -475,6 +476,7 @@ public class Dependency {
         mProviders.put(ForegroundServiceNotificationListener.class,
                 mForegroundServiceNotificationListener::get);
         mProviders.put(ClockManager.class, mClockManager::get);
+        mProviders.put(PrivacyItemController.class, mPrivacyItemController::get);
         mProviders.put(ActivityManagerWrapper.class, mActivityManagerWrapper::get);
         mProviders.put(DevicePolicyManagerWrapper.class, mDevicePolicyManagerWrapper::get);
         mProviders.put(PackageManagerWrapper.class, mPackageManagerWrapper::get);
@@ -519,15 +521,6 @@ public class Dependency {
                 .filter(obj -> obj instanceof Dumpable && (controller == null
                         || obj.getClass().getName().toLowerCase().endsWith(controller)))
                 .forEach(o -> ((Dumpable) o).dump(fd, pw, args));
-    }
-
-    protected static void staticOnConfigurationChanged(Configuration newConfig) {
-        sDependency.onConfigurationChanged(newConfig);
-    }
-
-    protected synchronized void onConfigurationChanged(Configuration newConfig) {
-        mDependencies.values().stream().filter(obj -> obj instanceof ConfigurationChangedReceiver)
-                .forEach(o -> ((ConfigurationChangedReceiver) o).onConfigurationChanged(newConfig));
     }
 
     protected final <T> T getDependency(Class<T> cls) {

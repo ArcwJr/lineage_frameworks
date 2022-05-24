@@ -138,6 +138,7 @@ import com.android.internal.util.FastXmlSerializer;
 import com.android.internal.util.HexDump;
 import com.android.internal.util.IndentingPrintWriter;
 import com.android.internal.util.Preconditions;
+import com.android.internal.widget.ILockSettings;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.server.storage.AppFuseBridge;
 import com.android.server.wm.ActivityTaskManagerInternal;
@@ -1284,6 +1285,8 @@ class StorageManagerService extends IStorageManager.Stub
             // public API requirement of being in a stable location.
             if (vol.disk.isAdoptable()) {
                 vol.mountFlags |= VolumeInfo.MOUNT_FLAG_VISIBLE;
+            } else if (vol.disk.isSd()) {
+                vol.mountFlags |= VolumeInfo.MOUNT_FLAG_VISIBLE;
             }
 
             vol.mountUserId = mCurrentUserId;
@@ -1557,10 +1560,11 @@ class StorageManagerService extends IStorageManager.Stub
     }
 
     private void start() {
-        connect();
+        connectStoraged();
+        connectVold();
     }
 
-    private void connect() {
+    private void connectStoraged() {
         IBinder binder = ServiceManager.getService("storaged");
         if (binder != null) {
             try {
@@ -1569,7 +1573,7 @@ class StorageManagerService extends IStorageManager.Stub
                     public void binderDied() {
                         Slog.w(TAG, "storaged died; reconnecting");
                         mStoraged = null;
-                        connect();
+                        connectStoraged();
                     }
                 }, 0);
             } catch (RemoteException e) {
@@ -1583,7 +1587,17 @@ class StorageManagerService extends IStorageManager.Stub
             Slog.w(TAG, "storaged not found; trying again");
         }
 
-        binder = ServiceManager.getService("vold");
+        if (mStoraged == null) {
+            BackgroundThread.getHandler().postDelayed(() -> {
+                connectStoraged();
+            }, DateUtils.SECOND_IN_MILLIS);
+        } else {
+            onDaemonConnected();
+        }
+    }
+
+    private void connectVold() {
+        IBinder binder = ServiceManager.getService("vold");
         if (binder != null) {
             try {
                 binder.linkToDeath(new DeathRecipient() {
@@ -1591,7 +1605,7 @@ class StorageManagerService extends IStorageManager.Stub
                     public void binderDied() {
                         Slog.w(TAG, "vold died; reconnecting");
                         mVold = null;
-                        connect();
+                        connectVold();
                     }
                 }, 0);
             } catch (RemoteException e) {
@@ -1611,9 +1625,9 @@ class StorageManagerService extends IStorageManager.Stub
             Slog.w(TAG, "vold not found; trying again");
         }
 
-        if (mStoraged == null || mVold == null) {
+        if (mVold == null) {
             BackgroundThread.getHandler().postDelayed(() -> {
-                connect();
+                connectVold();
             }, DateUtils.SECOND_IN_MILLIS);
         } else {
             onDaemonConnected();
@@ -2510,8 +2524,22 @@ class StorageManagerService extends IStorageManager.Stub
             Slog.i(TAG, "changing encryption password...");
         }
 
+        ILockSettings lockSettings = ILockSettings.Stub.asInterface(
+                        ServiceManager.getService("lock_settings"));
+        String currentPassword="default_password";
         try {
-            mVold.fdeChangePassword(type, password);
+            currentPassword = lockSettings.getPassword();
+        } catch (Exception e) {
+            Slog.wtf(TAG, "Couldn't get password" + e);
+        }
+
+        try {
+            mVold.fdeChangePassword(type, currentPassword, password);
+            try {
+                lockSettings.sanitizePassword();
+            } catch (Exception e) {
+                Slog.wtf(TAG, "Couldn't sanitize password" + e);
+            }
             return 0;
         } catch (Exception e) {
             Slog.wtf(TAG, e);
@@ -2767,6 +2795,24 @@ class StorageManagerService extends IStorageManager.Stub
 
         try {
             mVold.addUserKeyAuth(userId, serialNumber, encodeBytes(token), encodeBytes(secret));
+        } catch (Exception e) {
+            Slog.wtf(TAG, e);
+        }
+    }
+
+    /*
+     * Clear disk encryption key bound to the associated token / secret pair. Removing the user
+     * binding of the Disk encryption key is done in two phases: first, this call will retrieve
+     * the disk encryption key using the provided token / secret pair and store it by
+     * encrypting it with a keymaster key not bound to the user, then fixateNewestUserKeyAuth
+     * is called to delete all other bindings of the disk encryption key.
+     */
+    @Override
+    public void clearUserKeyAuth(int userId, int serialNumber, byte[] token, byte[] secret) {
+        enforcePermission(android.Manifest.permission.STORAGE_INTERNAL);
+
+        try {
+            mVold.clearUserKeyAuth(userId, serialNumber, encodeBytes(token), encodeBytes(secret));
         } catch (Exception e) {
             Slog.wtf(TAG, e);
         }

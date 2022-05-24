@@ -17,16 +17,6 @@
 package com.android.server.wifi.hotspot2;
 
 import static android.app.AppOpsManager.OPSTR_CHANGE_WIFI_STATE;
-import static android.net.wifi.WifiManager.ACTION_PASSPOINT_DEAUTH_IMMINENT;
-import static android.net.wifi.WifiManager.ACTION_PASSPOINT_ICON;
-import static android.net.wifi.WifiManager.ACTION_PASSPOINT_SUBSCRIPTION_REMEDIATION;
-import static android.net.wifi.WifiManager.EXTRA_BSSID_LONG;
-import static android.net.wifi.WifiManager.EXTRA_DELAY;
-import static android.net.wifi.WifiManager.EXTRA_ESS;
-import static android.net.wifi.WifiManager.EXTRA_FILENAME;
-import static android.net.wifi.WifiManager.EXTRA_ICON;
-import static android.net.wifi.WifiManager.EXTRA_SUBSCRIPTION_REMEDIATION_METHOD;
-import static android.net.wifi.WifiManager.EXTRA_URL;
 
 import static com.android.server.wifi.hotspot2.Utils.isCarrierEapMethod;
 
@@ -34,8 +24,6 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.AppOpsManager;
 import android.content.Context;
-import android.content.Intent;
-import android.graphics.drawable.Icon;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
@@ -48,7 +36,6 @@ import android.net.wifi.hotspot2.pps.HomeSp;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
-import android.os.UserHandle;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
@@ -72,6 +59,7 @@ import com.android.server.wifi.hotspot2.anqp.NAIRealmElement;
 import com.android.server.wifi.hotspot2.anqp.OsuProviderInfo;
 import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.TelephonyUtil;
+import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import java.io.PrintWriter;
 import java.security.cert.X509Certificate;
@@ -130,6 +118,8 @@ public class PasspointManager {
     private final TelephonyManager mTelephonyManager;
     private final AppOpsManager mAppOps;
     private final SubscriptionManager mSubscriptionManager;
+    private final WifiPermissionsUtil mWifiPermissionsUtil;
+
 
     /**
      * Map of package name of an app to the app ops changed listener for the app.
@@ -164,38 +154,12 @@ public class PasspointManager {
 
         @Override
         public void onIconResponse(long bssid, String fileName, byte[] data) {
-            Intent intent = new Intent(ACTION_PASSPOINT_ICON);
-            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-            intent.putExtra(EXTRA_BSSID_LONG, bssid);
-            intent.putExtra(EXTRA_FILENAME, fileName);
-            if (data != null) {
-                intent.putExtra(EXTRA_ICON, Icon.createWithData(data, 0, data.length));
-            }
-            mContext.sendBroadcastAsUser(intent, UserHandle.ALL,
-                    android.Manifest.permission.ACCESS_WIFI_STATE);
+            // Empty
         }
 
         @Override
         public void onWnmFrameReceived(WnmData event) {
-            // %012x HS20-SUBSCRIPTION-REMEDIATION "%u %s", osu_method, url
-            // %012x HS20-DEAUTH-IMMINENT-NOTICE "%u %u %s", code, reauth_delay, url
-            Intent intent;
-            if (event.isDeauthEvent()) {
-                intent = new Intent(ACTION_PASSPOINT_DEAUTH_IMMINENT);
-                intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-                intent.putExtra(EXTRA_BSSID_LONG, event.getBssid());
-                intent.putExtra(EXTRA_URL, event.getUrl());
-                intent.putExtra(EXTRA_ESS, event.isEss());
-                intent.putExtra(EXTRA_DELAY, event.getDelay());
-            } else {
-                intent = new Intent(ACTION_PASSPOINT_SUBSCRIPTION_REMEDIATION);
-                intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-                intent.putExtra(EXTRA_BSSID_LONG, event.getBssid());
-                intent.putExtra(EXTRA_SUBSCRIPTION_REMEDIATION_METHOD, event.getMethod());
-                intent.putExtra(EXTRA_URL, event.getUrl());
-            }
-            mContext.sendBroadcastAsUser(intent, UserHandle.ALL,
-                    android.Manifest.permission.ACCESS_WIFI_STATE);
+            // Empty
         }
     }
 
@@ -217,6 +181,7 @@ public class PasspointManager {
         public void setProviders(List<PasspointProvider> providers) {
             mProviders.clear();
             for (PasspointProvider provider : providers) {
+                provider.enableVerboseLogging(mVerboseLoggingEnabled ? 1 : 0);
                 mProviders.put(provider.getConfig().getHomeSp().getFqdn(), provider);
                 if (provider.getPackageName() != null) {
                     startTrackingAppOpsChange(provider.getPackageName(),
@@ -336,7 +301,8 @@ public class PasspointManager {
             PasspointObjectFactory objectFactory, WifiConfigManager wifiConfigManager,
             WifiConfigStore wifiConfigStore,
             WifiMetrics wifiMetrics,
-            TelephonyManager telephonyManager, SubscriptionManager subscriptionManager) {
+            TelephonyManager telephonyManager, SubscriptionManager subscriptionManager,
+            WifiPermissionsUtil wifiPermissionsUtil) {
         mPasspointEventHandler = objectFactory.makePasspointEventHandler(wifiNative,
                 new CallbackHandler(context));
         mWifiInjector = wifiInjector;
@@ -361,6 +327,7 @@ public class PasspointManager {
                 this, wifiMetrics);
         mAppOps = (AppOpsManager) context.getSystemService(Context.APP_OPS_SERVICE);
         sPasspointManager = this;
+        mWifiPermissionsUtil = wifiPermissionsUtil;
     }
 
     /**
@@ -377,6 +344,9 @@ public class PasspointManager {
     public void enableVerboseLogging(int verbose) {
         mVerboseLoggingEnabled = (verbose > 0) ? true : false;
         mPasspointProvisioner.enableVerboseLogging(verbose);
+        for (PasspointProvider provider : mProviders.values()) {
+            provider.enableVerboseLogging(verbose);
+        }
     }
 
     /**
@@ -398,6 +368,10 @@ public class PasspointManager {
         }
         if (!config.validate()) {
             Log.e(TAG, "Invalid configuration");
+            return false;
+        }
+        if (!mWifiPermissionsUtil.doesUidBelongToCurrentUser(uid)) {
+            Log.e(TAG, "UID " + uid + " not visible to the current user");
             return false;
         }
 
@@ -433,6 +407,7 @@ public class PasspointManager {
             mProviders.get(config.getHomeSp().getFqdn()).uninstallCertsAndKeys();
             mProviders.remove(config.getHomeSp().getFqdn());
         }
+        newProvider.enableVerboseLogging(mVerboseLoggingEnabled ? 1 : 0);
         mProviders.put(config.getHomeSp().getFqdn(), newProvider);
         mWifiConfigManager.saveToStore(true /* forceWrite */);
         if (newProvider.getPackageName() != null) {
@@ -674,6 +649,10 @@ public class PasspointManager {
         if (!privileged && callingUid != provider.getCreatorUid()) {
             Log.e(TAG, "UID " + callingUid + " cannot remove profile created by "
                     + provider.getCreatorUid());
+            return false;
+        }
+        if (!mWifiPermissionsUtil.doesUidBelongToCurrentUser(callingUid)) {
+            Log.e(TAG, "UID " + callingUid + " not visible to the current user");
             return false;
         }
         provider.uninstallCertsAndKeys();
@@ -1165,6 +1144,7 @@ public class PasspointManager {
                 Arrays.asList(enterpriseConfig.getCaCertificateAlias()),
                 enterpriseConfig.getClientCertificateAlias(),
                 enterpriseConfig.getClientCertificateAlias(), null, false, false);
+        provider.enableVerboseLogging(mVerboseLoggingEnabled ? 1 : 0);
         mProviders.put(passpointConfig.getHomeSp().getFqdn(), provider);
         return true;
     }

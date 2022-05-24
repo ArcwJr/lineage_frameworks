@@ -16,6 +16,7 @@
 
 package com.android.server.pm;
 
+import static android.Manifest.permission.INJECT_EVENTS;
 import static android.content.Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_TASK;
 
@@ -39,6 +40,7 @@ import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.pm.PackageManagerInternal;
 import android.content.pm.ShortcutServiceInternal;
 import android.content.pm.UserInfo;
 import android.content.pm.UserInfo.UserInfoFlag;
@@ -127,6 +129,7 @@ import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Service for {@link UserManager}.
@@ -250,6 +253,7 @@ public class UserManagerService extends IUserManager.Stub {
     private final File mUserListFile;
 
     private static final IBinder mUserRestriconToken = new Binder();
+    private final AtomicBoolean mNotifyPackageManagerOnUserRemoval = new AtomicBoolean(false);
 
     /**
      * Internal non-parcelable wrapper for UserInfo that is not exposed to other system apps.
@@ -2903,7 +2907,7 @@ public class UserManagerService extends IUserManager.Stub {
                     userInfo.creationTime = getCreationTime();
                     userInfo.partial = true;
                     userInfo.preCreated = preCreate;
-                    userInfo.lastLoggedInFingerprint = Build.FINGERPRINT;
+                    userInfo.lastLoggedInFingerprint = Build.DATE;
                     if (isManagedProfile && parentId != UserHandle.USER_NULL) {
                         userInfo.profileBadge = getFreeProfileBadgeLU(parentId);
                     }
@@ -3352,6 +3356,11 @@ public class UserManagerService extends IUserManager.Stub {
                 mRemovingUserIds.delete(userHandle);
             }
         }
+        if (mNotifyPackageManagerOnUserRemoval.getAndSet(false)) {
+            final PackageManagerInternal pmInternal =
+                    LocalServices.getService(PackageManagerInternal.class);
+            pmInternal.userRemovedForTest();
+        }
     }
 
     private void sendProfileRemovedBroadcast(int parentUserId, int removedUserId) {
@@ -3672,7 +3681,7 @@ public class UserManagerService extends IUserManager.Stub {
         }
         final int userSerial = userInfo.serialNumber;
         // Migrate only if build fingerprints mismatch
-        boolean migrateAppsData = !Build.FINGERPRINT.equals(userInfo.lastLoggedInFingerprint);
+        boolean migrateAppsData = !Build.DATE.equals(userInfo.lastLoggedInFingerprint);
         mUserDataPreparer.prepareUserData(userId, userSerial, StorageManager.FLAG_STORAGE_DE);
         mPm.reconcileAppsData(userId, StorageManager.FLAG_STORAGE_DE, migrateAppsData);
 
@@ -3694,7 +3703,7 @@ public class UserManagerService extends IUserManager.Stub {
         }
         final int userSerial = userInfo.serialNumber;
         // Migrate only if build fingerprints mismatch
-        boolean migrateAppsData = !Build.FINGERPRINT.equals(userInfo.lastLoggedInFingerprint);
+        boolean migrateAppsData = !Build.DATE.equals(userInfo.lastLoggedInFingerprint);
         mUserDataPreparer.prepareUserData(userId, userSerial, StorageManager.FLAG_STORAGE_CE);
         mPm.reconcileAppsData(userId, StorageManager.FLAG_STORAGE_CE, migrateAppsData);
     }
@@ -3727,7 +3736,7 @@ public class UserManagerService extends IUserManager.Stub {
         if (now > EPOCH_PLUS_30_YEARS) {
             userData.info.lastLoggedInTime = now;
         }
-        userData.info.lastLoggedInFingerprint = Build.FINGERPRINT;
+        userData.info.lastLoggedInFingerprint = Build.DATE;
         scheduleWriteUser(userData);
     }
 
@@ -4492,5 +4501,21 @@ public class UserManagerService extends IUserManager.Stub {
             throw new SecurityException("Specified package " + callingPackage
                     + " does not match the calling uid " + callingUid);
         }
+    }
+
+    @Override
+    public void notifyOnNextUserRemoveForTest() {
+        mContext.enforceCallingOrSelfPermission(INJECT_EVENTS, "notifyOnNextUserRemoveForTest");
+        final ActivityManagerInternal amInternal =
+                LocalServices.getService(ActivityManagerInternal.class);
+        if (!amInternal.isActiveInstrumentation(Binder.getCallingUid())) {
+            return;
+        }
+
+        this.mNotifyPackageManagerOnUserRemoval.set(true);
+
+        final PackageManagerInternal pmInternal =
+                LocalServices.getService(PackageManagerInternal.class);
+        pmInternal.notifyingOnNextUserRemovalForTest();
     }
 }
